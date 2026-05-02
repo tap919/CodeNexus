@@ -937,9 +937,9 @@ export class PluginRegistry {
           );
         }
         // Restrict to plugins directory — block bare specifiers and node_modules access
-        const PLUGIN_DIR = 'plugins/';
-        const resolved = path.resolve(entrypoint);
+        const PLUGIN_DIR = this.config.pluginDir;
         const pluginsDir = path.resolve(PLUGIN_DIR);
+        const resolved = path.resolve(pluginsDir, entrypoint);
 
         // Block path traversal, absolute paths, and Windows drive letters
         if (

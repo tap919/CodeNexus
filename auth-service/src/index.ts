@@ -336,16 +336,9 @@ export async function createAuthService(
       const token = authHeader.slice(7);
       const payload = await authenticator.verifyAccessToken(token);
       if (payload && typeof payload.session_id === "string") {
-        return {
-          id: payload.session_id as string,
-          username: payload.sub as string,
-          groups: (payload.groups as string[]) ?? [],
-          emails: (payload.emails as string[]) ?? [],
-          authenticationLevel: (payload.authentication_level as AuthLevel) ?? 0,
-          authenticationMethods: (payload.amr as string[]) ?? [],
-          createdAt: "",
-          expiresAt: "",
-        };
+        // Verify session still exists in the store (handles post-logout revocation)
+        const liveSession = await sessionStore.getSession(payload.session_id);
+        return liveSession ?? null;
       }
     }
     return null;
@@ -1038,18 +1031,25 @@ export async function createAuthService(
           const newAccessToken = await authenticator.generateAccessToken(session, ['openid', 'profile', 'email']);
           const newRefreshToken = await authenticator.generateRefreshToken(session);
           const now = Math.floor(Date.now() / 1000);
-          const idSecret = new TextEncoder().encode(config.auth.jwtSecret);
-          const idToken = await new SignJWT({
+          const idTokenClaims = {
             sub: session.username,
-            aud: config.auth.jwtAudience,
+            aud: oidcSigningKey ? session.username : config.auth.jwtAudience,
             iat: now,
             auth_time: now,
             session_id: session.id,
-          })
-            .setProtectedHeader({ alg: 'HS256' })
-            .setIssuer(config.auth.jwtIssuer)
-            .setExpirationTime(now + 3600)
-            .sign(idSecret);
+          };
+          const idToken = oidcSigningKey
+            ? await new SignJWT(idTokenClaims)
+                .setProtectedHeader({ alg: 'RS256', kid: oidcKeyId })
+                .setIssuer(config.oidc.issuer)
+                .setIssuedAt(now)
+                .setExpirationTime(now + 3600)
+                .sign(oidcSigningKey)
+            : await new SignJWT(idTokenClaims)
+                .setProtectedHeader({ alg: 'HS256' })
+                .setIssuer(config.auth.jwtIssuer)
+                .setExpirationTime(now + 3600)
+                .sign(new TextEncoder().encode(config.auth.jwtSecret));
           res.json({
             access_token: newAccessToken,
             refresh_token: newRefreshToken,
