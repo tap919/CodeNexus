@@ -2,21 +2,27 @@ import { test, expect } from '@playwright/test';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { startTestAuthService, loginAs, getAuthHeaders, createTestUser, TEST_JWT_SECRET, TEST_ISSUER, TEST_AUDIENCE } from './helpers/setup';
+import type { SessionStore } from '../../../auth-service/src/session-store';
 
 let authApp: express.Application;
 let authURL: string;
 let authServer: any;
+let sessionStore: SessionStore;
 
 test.beforeAll(async () => {
   const userA = await createTestUser('alice', 'alice123', ['user']);
   const userB = await createTestUser('bob', 'bob123', ['user']);
   const state = await startTestAuthService([userA, userB]);
   authApp = state.app;
+  sessionStore = state.sessionStore;
   authServer = authApp.listen(0);
   authURL = `http://localhost:${authServer.address().port}`;
 });
 
-test.afterAll(() => { if (authServer) authServer.close(); });
+test.afterAll(async () => {
+  await sessionStore.destroy();
+  if (authServer) authServer.close();
+});
 
 test('cannot access session info with another users cookie', async ({ request }) => {
   const { body: aliceBody, cookie: aliceCookie } = await loginAs(request, authURL, 'alice', 'alice123');

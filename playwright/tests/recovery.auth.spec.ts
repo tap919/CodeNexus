@@ -1,20 +1,26 @@
 import { test, expect } from '@playwright/test';
 import express from 'express';
 import { startTestAuthService, loginAs, createTestUser } from './helpers/setup';
+import type { SessionStore } from '../../../auth-service/src/session-store';
 
 let app: express.Application;
 let baseURL: string;
 let server: any;
+let sessionStore: SessionStore;
 
 test.beforeAll(async () => {
   const user = await createTestUser('recover', 'recover123', []);
   const state = await startTestAuthService([user]);
   app = state.app;
+  sessionStore = state.sessionStore;
   server = app.listen(0);
   baseURL = `http://localhost:${server.address().port}`;
 });
 
-test.afterAll(() => { if (server) server.close(); });
+test.afterAll(async () => {
+  await sessionStore.destroy();
+  if (server) server.close();
+});
 
 test('rate limiter recovers after window expiry', async ({ request }) => {
   // Exhaust login rate limit (10 req/15min)

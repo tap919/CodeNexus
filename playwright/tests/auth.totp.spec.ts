@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import express from 'express';
 import * as crypto from 'node:crypto';
 import { startTestAuthService, loginAs, createTestUser, TEST_PEPPER, TEST_JWT_SECRET } from './helpers/setup';
+import type { SessionStore } from '../../../auth-service/src/session-store';
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -38,6 +39,7 @@ function generateTOTP(secret: string, digits = 6, period = 30): string {
 let app: express.Application;
 let baseURL: string;
 let server: any;
+let sessionStore: SessionStore;
 const TOTP_USER = 'totpuser';
 const TOTP_PASS = 'totppass123';
 
@@ -45,11 +47,15 @@ test.beforeAll(async () => {
   const user = await createTestUser(TOTP_USER, TOTP_PASS, []);
   const state = await startTestAuthService([user]);
   app = state.app;
+  sessionStore = state.sessionStore;
   server = app.listen(0);
   baseURL = `http://localhost:${server.address().port}`;
 });
 
-test.afterAll(() => { if (server) server.close(); });
+test.afterAll(async () => {
+  await sessionStore.destroy();
+  if (server) server.close();
+});
 
 test('can enroll TOTP and get secret + URI', async ({ request }) => {
   const { cookie } = await loginAs(request, baseURL, TOTP_USER, TOTP_PASS);

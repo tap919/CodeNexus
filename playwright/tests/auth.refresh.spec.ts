@@ -7,20 +7,24 @@ import {
   createTestUser,
   TEST_JWT_SECRET,
 } from './helpers/setup';
+import type { SessionStore } from '../../../auth-service/src/session-store';
 
 let app: express.Application;
 let baseURL: string;
 let server: any;
+let sessionStore: SessionStore;
 
 test.beforeAll(async () => {
   const user = await createTestUser('refreshuser', 'refresh123', ['user']);
   const state = await startTestAuthService([user]);
   app = state.app;
+  sessionStore = state.sessionStore;
   server = app.listen(0);
   baseURL = `http://localhost:${server.address().port}`;
 });
 
-test.afterAll(() => {
+test.afterAll(async () => {
+  await sessionStore.destroy();
   if (server) server.close();
 });
 

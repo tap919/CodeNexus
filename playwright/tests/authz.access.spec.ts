@@ -9,6 +9,7 @@ import {
   TEST_JWT_SECRET,
   TEST_ISSUER,
 } from './helpers/setup';
+import type { SessionStore } from '../../../auth-service/src/session-store';
 
 let authApp: express.Application;
 let analyticsApp: express.Application;
@@ -16,6 +17,7 @@ let authURL: string;
 let analyticsURL: string;
 let authServer: any;
 let analyticsServer: any;
+let sessionStore: SessionStore;
 let adminToken: string;
 
 test.beforeAll(async ({ request }) => {
@@ -23,6 +25,7 @@ test.beforeAll(async ({ request }) => {
   const viewerUser = await createTestUser('viewer', 'viewer123', ['viewer']);
   const authState = await startTestAuthService([adminUser, viewerUser]);
   authApp = authState.app;
+  sessionStore = authState.sessionStore;
   authServer = authApp.listen(0);
   authURL = `http://localhost:${authServer.address().port}`;
 
@@ -39,7 +42,8 @@ test.beforeAll(async ({ request }) => {
   adminToken = body.accessToken;
 });
 
-test.afterAll(() => {
+test.afterAll(async () => {
+  await sessionStore.destroy();
   if (authServer) authServer.close();
   if (analyticsServer) analyticsServer.close();
 });

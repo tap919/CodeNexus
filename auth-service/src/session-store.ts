@@ -143,7 +143,7 @@ export class SessionStore {
 
     if (this.redisClient) {
       await this.redisClient.set(key, JSON.stringify(stored), {
-        PX: expiresAt - Date.now(),
+        PX: Math.max(1000, expiresAt - Date.now()),
       });
     } else {
       this.memoryStore.set(key, record);
@@ -226,7 +226,7 @@ export class SessionStore {
 
     if (this.redisClient) {
       await this.redisClient.set(key, JSON.stringify(stored), {
-        PX: expiresAt - Date.now(),
+        PX: Math.max(1000, expiresAt - Date.now()),
       });
     } else {
       this.memoryStore.set(key, record);
