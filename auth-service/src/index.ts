@@ -201,6 +201,7 @@ export async function createAuthService(
 
   // ── Authorization Code Store ──────────────────────────────
 
+  // NOTE: In-memory Map — for multi-instance deployments, store in Redis/D1 instead.
   const authorizationCodes = new Map<string, {
     clientId: string;
     redirectUri: string;
@@ -208,6 +209,7 @@ export async function createAuthService(
     codeChallenge?: string;
     codeChallengeMethod?: string;
     nonce?: string;
+    state?: string;
     expiresAt: number;
     used: boolean;
     sessionId: string | null;
@@ -843,9 +845,10 @@ export async function createAuthService(
       codeChallenge: code_challenge as string,
       codeChallengeMethod: code_challenge_method as string,
       nonce: nonce as string,
+      state: state as string,
       expiresAt: codeExpires,
       used: false,
-      sessionId: null,
+      sessionId: null, // Population requires prior user login; see README
     });
 
     // Build redirect URL
@@ -916,7 +919,7 @@ export async function createAuthService(
         }
 
         case "authorization_code": {
-          const { code, code_verifier, redirect_uri } = req.body;
+          const { code, code_verifier, redirect_uri, state } = req.body;
 
           if (!code) {
             res.status(400).json({ error: 'invalid_request', message: 'Authorization code is required' });
@@ -926,6 +929,12 @@ export async function createAuthService(
           const codeData = authorizationCodes.get(code);
           if (!codeData || codeData.used || codeData.expiresAt < Date.now()) {
             res.status(400).json({ error: 'invalid_grant', message: 'Invalid, expired, or already used authorization code' });
+            return;
+          }
+
+          // CSRF state validation (OAuth 2.0 §10.12)
+          if (codeData.state && codeData.state !== state) {
+            res.status(400).json({ error: 'invalid_grant', message: 'State mismatch — possible CSRF' });
             return;
           }
 
@@ -975,18 +984,29 @@ export async function createAuthService(
             expiresAt: new Date(Date.now() + 86400000).toISOString(),
           });
 
-          // Build id_token
+          // Build id_token — uses RS256 when RSA signing key is configured
           const idToken = codeData.nonce
-            ? await authenticator.generateAccessToken({
-                id: codeData.sessionId || 'anonymous',
-                username: codeData.clientId,
-                groups: [],
-                emails: [],
-                authenticationLevel: 1,
-                authenticationMethods: ['pwd'],
-                createdAt: new Date().toISOString(),
-                expiresAt: new Date(Date.now() + 3600000).toISOString(),
-              }, ['openid', 'profile'])
+            ? oidcSigningKey
+              ? await new SignJWT({
+                  sub: codeData.clientId,
+                  aud: codeData.clientId,
+                  nonce: codeData.nonce,
+                })
+                  .setProtectedHeader({ alg: 'RS256', kid: oidcKeyId })
+                  .setIssuer(config.oidc.issuer)
+                  .setIssuedAt(Math.floor(Date.now() / 1000))
+                  .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+                  .sign(oidcSigningKey)
+              : await authenticator.generateAccessToken({
+                  id: codeData.sessionId || 'anonymous',
+                  username: codeData.clientId,
+                  groups: [],
+                  emails: [],
+                  authenticationLevel: 1,
+                  authenticationMethods: ['pwd'],
+                  createdAt: new Date().toISOString(),
+                  expiresAt: new Date(Date.now() + 3600000).toISOString(),
+                }, ['openid', 'profile'])
             : undefined;
 
           res.json({

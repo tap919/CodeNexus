@@ -175,13 +175,12 @@ export class PluginRegistry {
   /**
    * Register a plugin's metadata. Does not load the plugin.
    */
-  register(metadata: PluginMetadata, authToken?: string, opts?: { permissions?: PluginPermissions }): PluginInstance {
+  async register(metadata: PluginMetadata, authToken?: string, opts?: { permissions?: PluginPermissions }): Promise<PluginInstance> {
     if (authToken) {
       try {
-        const jwt = require('jsonwebtoken');
-        jwt.verify(authToken, process.env.AUTH_JWT_SECRET || '', {
-          algorithms: ['HS256'],
-        });
+        const { jwtVerify } = await import('jose');
+        const secret = new TextEncoder().encode(process.env.AUTH_JWT_SECRET || '');
+        await jwtVerify(authToken, secret, { algorithms: ['HS256'] });
       } catch {
         throw new Error('PluginRegistrationError: invalid authentication token');
       }
@@ -891,7 +890,7 @@ export class PluginRegistry {
     }
     this.plugins.clear();
     this.skills.clear();
-    this.listeners.length = 0;
+    this.listeners.clear();
   }
 
   private capitalize(str: string): string {
@@ -937,25 +936,43 @@ export class PluginRegistry {
             'INVALID_ENTRYPOINT'
           );
         }
-        // Reject path traversal and absolute paths
+        // Restrict to plugins directory — block bare specifiers and node_modules access
+        const PLUGIN_DIR = 'plugins/';
+        const resolved = path.resolve(entrypoint);
+        const pluginsDir = path.resolve(PLUGIN_DIR);
+
+        // Block path traversal, absolute paths, and Windows drive letters
         if (
           entrypoint.includes('..') ||
           path.isAbsolute(entrypoint) ||
           /^[a-zA-Z]:[\\/]/.test(entrypoint)
         ) {
           throw new PluginError(
-            `Plugin "${metadata.id}" entrypoint must be a relative package path (got: "${entrypoint}")`,
+            `Plugin "${metadata.id}" entrypoint must be a relative path under ${PLUGIN_DIR} (got: "${entrypoint}")`,
             'INVALID_ENTRYPOINT'
           );
         }
-        // Only allow .js, .ts, .mjs extensions or bare specifiers
-        if (
-          entrypoint.includes('/') &&
-          !/\.(js|ts|mjs|cjs)$/i.test(entrypoint) &&
-          !/^[A-Za-z@]/.test(entrypoint)
-        ) {
+
+        // Block bare specifiers (e.g. 'child_process', 'fs') and node_modules access
+        if (!entrypoint.includes('/') && !entrypoint.includes('\\')) {
           throw new PluginError(
-            `Plugin "${metadata.id}" entrypoint must be a recognized module path (got: "${entrypoint}")`,
+            `Plugin "${metadata.id}" entrypoint must be a relative path, not a bare module specifier (got: "${entrypoint}")`,
+            'INVALID_ENTRYPOINT'
+          );
+        }
+
+        // Must be under the plugins directory
+        if (!resolved.startsWith(pluginsDir + path.sep) && resolved !== pluginsDir) {
+          throw new PluginError(
+            `Plugin "${metadata.id}" entrypoint must be under ${PLUGIN_DIR} directory (got: "${entrypoint}")`,
+            'INVALID_ENTRYPOINT'
+          );
+        }
+
+        // Only allow recognized extensions
+        if (!/\.(js|ts|mjs|cjs)$/i.test(entrypoint)) {
+          throw new PluginError(
+            `Plugin "${metadata.id}" entrypoint must have .js/.ts/.mjs/.cjs extension (got: "${entrypoint}")`,
             'INVALID_ENTRYPOINT'
           );
         }
