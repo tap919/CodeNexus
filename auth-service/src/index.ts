@@ -22,7 +22,7 @@ import express, {
 } from "express";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
-import jwt from "jsonwebtoken";
+import { SignJWT } from "jose";
 import {
   AuthLevel,
   Policy,
@@ -199,6 +199,20 @@ export async function createAuthService(
   let oidcVerificationKey: crypto.KeyLike | null = null;
   const oidcKeyId = crypto.randomUUID().slice(0, 8);
 
+  // ── Authorization Code Store ──────────────────────────────
+
+  const authorizationCodes = new Map<string, {
+    clientId: string;
+    redirectUri: string;
+    scope: string;
+    codeChallenge?: string;
+    codeChallengeMethod?: string;
+    nonce?: string;
+    expiresAt: number;
+    used: boolean;
+    sessionId: string | null;
+  }>();
+
   if (config.oidc.signingKeyPath && fs.existsSync(config.oidc.signingKeyPath)) {
     const pem = fs.readFileSync(config.oidc.signingKeyPath, "utf-8");
     oidcSigningKey = crypto.createPrivateKey(pem);
@@ -228,19 +242,28 @@ export async function createAuthService(
   app.use(corsHeaders);
 
   // ── Rate Limiting ────────────────────────────────────────
+  // NOTE: For production multi-instance deployments, replace the default
+  // in-memory store with rate-limit-redis. Example:
+  //   import { RedisStore } from 'rate-limit-redis';
+  //   const store = new RedisStore({ client: redisClient });
+  // Then pass `store` to each rateLimit() call below.
+  // Without Redis, rate limit counters reset on server restart.
+  // Set TEST_MODE=true to disable rate limiting during tests.
+
+  const isTestMode = process.env.TEST_MODE === 'true';
 
   const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    limit: 100,
+    windowMs: 15 * 60 * 1000,
+    limit: isTestMode ? 10000 : 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "too_many_requests", message: "Rate limit exceeded" },
   });
-  app.use(globalLimiter);
+  if (!isTestMode) app.use(globalLimiter);
 
   const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    limit: 10,
+    windowMs: 15 * 60 * 1000,
+    limit: isTestMode ? 10000 : 10,
     standardHeaders: true,
     legacyHeaders: false,
     message: {
@@ -250,8 +273,8 @@ export async function createAuthService(
   });
 
   const totpLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    limit: 5,
+    windowMs: 5 * 60 * 1000,
+    limit: isTestMode ? 10000 : 5,
     standardHeaders: true,
     legacyHeaders: false,
     message: {
@@ -292,7 +315,7 @@ export async function createAuthService(
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
       const token = authHeader.slice(7);
-      const payload = authenticator.verifyAccessToken(token);
+      const payload = await authenticator.verifyAccessToken(token);
       if (payload && typeof payload.session_id === "string") {
         const session = await sessionStore.getSession(payload.session_id);
         if (session) return session;
@@ -303,21 +326,14 @@ export async function createAuthService(
   }
 
   /**
-   * Synchronous session extraction for middleware (returns null
-   * if session not immediately available; caller still gets
-   * authorization result based on null session).
+   * Session extraction for middleware (async).
    */
-  function getSessionSync(req: Request): UserSession | null {
-    // For the sync middleware, we only check the Authorization header
-    // since cookie parsing requires async decryption in our design.
-    // The async version is available in route handlers.
+  async function getSessionAsync(req: Request): Promise<UserSession | null> {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
       const token = authHeader.slice(7);
-      const payload = authenticator.verifyAccessToken(token);
+      const payload = await authenticator.verifyAccessToken(token);
       if (payload && typeof payload.session_id === "string") {
-        // We return a partial session based on JWT claims.
-        // Full validation happens in the route handlers.
         return {
           id: payload.session_id as string,
           username: payload.sub as string,
@@ -337,7 +353,7 @@ export async function createAuthService(
 
   const authzMiddleware = createAuthorizationMiddleware(
     authorizer,
-    getSessionSync,
+    getSessionAsync,
   );
 
   // ── Routes ────────────────────────────────────────────────
@@ -419,6 +435,18 @@ export async function createAuthService(
           path: cookieOpts.path,
         });
 
+        // Set refresh token as httpOnly cookie (safer than JSON body)
+        if (result.refreshToken) {
+          res.cookie('codenexus_refresh_token', result.refreshToken, {
+            httpOnly: true,
+            secure: cookieOpts.secure,
+            sameSite: cookieOpts.sameSite,
+            domain: cookieOpts.domain,
+            maxAge: cookieOpts.maxAge * 24,
+            path: '/api/auth',
+          });
+        }
+
         res.json({
           success: true,
           accessToken: result.accessToken,
@@ -494,7 +522,7 @@ export async function createAuthService(
         }
 
         // Generate a new access token with upgraded auth level
-        const newAccessToken = authenticator.generateAccessToken(
+        const newAccessToken = await authenticator.generateAccessToken(
           result.session!,
           ["openid", "profile", "email"],
         );
@@ -670,17 +698,18 @@ export async function createAuthService(
    * POST /api/auth/token/refresh
    *
    * Exchange a refresh token for a new access token.
+   * Accepts refresh_token via JSON body OR httpOnly cookie.
    * Performs token rotation — issues a new refresh token on each use.
    */
-  app.post("/api/auth/token/refresh", async (req: Request, res: Response) => {
+  app.post("/api/auth/token/refresh", tokenLimiter, async (req: Request, res: Response) => {
     try {
-      const { refresh_token } = req.body;
+      const refresh_token = req.body?.refresh_token || req.cookies?.codenexus_refresh_token;
       if (!refresh_token || typeof refresh_token !== 'string') {
         res.status(400).json({ error: 'invalid_request', message: 'refresh_token is required' });
         return;
       }
 
-      const payload = authenticator.verifyRefreshToken(refresh_token);
+      const payload = await authenticator.verifyRefreshToken(refresh_token);
       if (!payload || typeof payload.session_id !== 'string') {
         res.status(401).json({ error: 'invalid_token', message: 'Invalid or expired refresh token' });
         return;
@@ -692,8 +721,19 @@ export async function createAuthService(
         return;
       }
 
-      const accessToken = authenticator.generateAccessToken(session, ['openid', 'profile', 'email']);
-      const newRefreshToken = authenticator.generateRefreshToken(session);
+      const accessToken = await authenticator.generateAccessToken(session, ['openid', 'profile', 'email']);
+      const newRefreshToken = await authenticator.generateRefreshToken(session);
+
+      // Set refresh token cookie BEFORE sending JSON response
+      const cookieOpts = sessionStore.getCookieOptions();
+      res.cookie('codenexus_refresh_token', newRefreshToken, {
+        httpOnly: true,
+        secure: cookieOpts.secure,
+        sameSite: cookieOpts.sameSite,
+        domain: cookieOpts.domain,
+        maxAge: cookieOpts.maxAge * 24,
+        path: '/api/auth',
+      });
 
       res.json({
         access_token: accessToken,
@@ -732,11 +772,10 @@ export async function createAuthService(
           "groups",
           "offline_access",
         ],
-        response_types_supported: ["code", "id_token", "token id_token"],
-        response_modes_supported: ["query", "fragment", "form_post"],
+        response_types_supported: ["code", "token", "id_token"],
+        response_modes_supported: ["fragment", "form_post"],
         grant_types_supported: [
           "authorization_code",
-          "implicit",
           "refresh_token",
           "client_credentials",
         ],
@@ -770,6 +809,52 @@ export async function createAuthService(
       });
     },
   );
+
+  /**
+   * GET /oidc/auth
+   *
+   * OIDC Authorization endpoint — initiates the authorization code flow.
+   */
+  app.get("/oidc/auth", (req: Request, res: Response) => {
+    const { client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method, nonce } = req.query;
+
+    // Validate client
+    const client = config.oidc.clients.find(c => c.clientId === client_id);
+    if (!client) {
+      res.status(400).json({ error: 'invalid_client' });
+      return;
+    }
+
+    // Validate redirect URI
+    if (!client.redirectUris.includes(redirect_uri as string)) {
+      res.status(400).json({ error: 'invalid_redirect_uri' });
+      return;
+    }
+
+    // Generate authorization code (short-lived, single-use)
+    const code = crypto.randomBytes(32).toString('hex');
+    const codeExpires = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+    // Store code with its metadata
+    authorizationCodes.set(code, {
+      clientId: client_id as string,
+      redirectUri: redirect_uri as string,
+      scope: scope as string || 'openid',
+      codeChallenge: code_challenge as string,
+      codeChallengeMethod: code_challenge_method as string,
+      nonce: nonce as string,
+      expiresAt: codeExpires,
+      used: false,
+      sessionId: null,
+    });
+
+    // Build redirect URL
+    const params = new URLSearchParams({ code });
+    if (state) params.set('state', state as string);
+    const redirectUrl = `${redirect_uri}?${params.toString()}`;
+
+    res.redirect(302, redirectUrl);
+  });
 
   /**
    * POST /oidc/token
@@ -809,17 +894,17 @@ export async function createAuthService(
         case "client_credentials": {
           // Client credentials grant
           const now = Math.floor(Date.now() / 1000);
-          const accessToken = jwt.sign(
-            {
-              sub: client_id,
-              iss: config.auth.jwtIssuer,
-              aud: config.auth.jwtAudience,
-              exp: now + 3600,
-              iat: now,
-              client_id,
-            },
-            config.auth.jwtSecret,
-          );
+          const secret = new TextEncoder().encode(config.auth.jwtSecret);
+          const accessToken = await new SignJWT({
+            sub: client_id,
+            aud: config.auth.jwtAudience,
+            iat: now,
+            client_id,
+          })
+            .setProtectedHeader({ alg: 'HS256' })
+            .setIssuer(config.auth.jwtIssuer)
+            .setExpirationTime(now + 3600)
+            .sign(secret);
 
           res.json({
             access_token: accessToken,
@@ -832,21 +917,85 @@ export async function createAuthService(
 
         case "authorization_code": {
           const { code, code_verifier, redirect_uri } = req.body;
+
           if (!code) {
             res.status(400).json({ error: 'invalid_request', message: 'Authorization code is required' });
             return;
           }
-          // In a full implementation, validate the code against stored codes
-          // For now, PKCE verification if provided
-          if (code_verifier && client.codeChallenge) {
-            if (!verifyPKCE(code_verifier, client.codeChallenge, client.codeChallengeMethod || 'S256')) {
+
+          const codeData = authorizationCodes.get(code);
+          if (!codeData || codeData.used || codeData.expiresAt < Date.now()) {
+            res.status(400).json({ error: 'invalid_grant', message: 'Invalid, expired, or already used authorization code' });
+            return;
+          }
+
+          // PKCE verification
+          if (codeData.codeChallenge) {
+            if (!code_verifier) {
+              res.status(400).json({ error: 'invalid_grant', message: 'code_verifier is required for PKCE' });
+              return;
+            }
+            if (!verifyPKCE(code_verifier, codeData.codeChallenge, codeData.codeChallengeMethod || 'S256')) {
               res.status(400).json({ error: 'invalid_grant', message: 'PKCE verification failed' });
               return;
             }
           }
-          res.status(400).json({
-            error: 'unsupported_grant_type',
-            message: 'Authorization code grant requires a stored authorization code (not yet implemented)',
+
+          // Verify redirect_uri matches
+          if (redirect_uri && redirect_uri !== codeData.redirectUri) {
+            res.status(400).json({ error: 'invalid_grant', message: 'redirect_uri mismatch' });
+            return;
+          }
+
+          // Mark code as used
+          codeData.used = true;
+          authorizationCodes.delete(code);
+
+          // Generate tokens
+          const now = Math.floor(Date.now() / 1000);
+          const accessToken = await authenticator.generateAccessToken({
+            id: codeData.sessionId || 'anonymous',
+            username: codeData.clientId,
+            groups: [],
+            emails: [],
+            authenticationLevel: 1,
+            authenticationMethods: ['pwd'],
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 3600000).toISOString(),
+          }, codeData.scope.split(' '));
+
+          const refreshToken = await authenticator.generateRefreshToken({
+            id: crypto.randomUUID(),
+            username: codeData.clientId,
+            groups: [],
+            emails: [],
+            authenticationLevel: 1,
+            authenticationMethods: ['pwd'],
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 86400000).toISOString(),
+          });
+
+          // Build id_token
+          const idToken = codeData.nonce
+            ? await authenticator.generateAccessToken({
+                id: codeData.sessionId || 'anonymous',
+                username: codeData.clientId,
+                groups: [],
+                emails: [],
+                authenticationLevel: 1,
+                authenticationMethods: ['pwd'],
+                createdAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 3600000).toISOString(),
+              }, ['openid', 'profile'])
+            : undefined;
+
+          res.json({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            id_token: idToken,
+            token_type: 'Bearer',
+            expires_in: 3600,
+            scope: codeData.scope,
           });
           return;
         }
@@ -856,7 +1005,7 @@ export async function createAuthService(
             res.status(400).json({ error: 'invalid_request', message: 'refresh_token is required' });
             return;
           }
-          const rtPayload = authenticator.verifyRefreshToken(refresh_token);
+          const rtPayload = await authenticator.verifyRefreshToken(refresh_token);
           if (!rtPayload || typeof rtPayload.session_id !== 'string') {
             res.status(401).json({ error: 'invalid_grant', message: 'Invalid or expired refresh token' });
             return;
@@ -866,26 +1015,27 @@ export async function createAuthService(
             res.status(401).json({ error: 'invalid_grant', message: 'Session expired' });
             return;
           }
-          const newAccessToken = authenticator.generateAccessToken(session, ['openid', 'profile', 'email']);
-          const newRefreshToken = authenticator.generateRefreshToken(session);
+          const newAccessToken = await authenticator.generateAccessToken(session, ['openid', 'profile', 'email']);
+          const newRefreshToken = await authenticator.generateRefreshToken(session);
           const now = Math.floor(Date.now() / 1000);
+          const idSecret = new TextEncoder().encode(config.auth.jwtSecret);
+          const idToken = await new SignJWT({
+            sub: session.username,
+            aud: config.auth.jwtAudience,
+            iat: now,
+            auth_time: now,
+            session_id: session.id,
+          })
+            .setProtectedHeader({ alg: 'HS256' })
+            .setIssuer(config.auth.jwtIssuer)
+            .setExpirationTime(now + 3600)
+            .sign(idSecret);
           res.json({
             access_token: newAccessToken,
             refresh_token: newRefreshToken,
             token_type: 'Bearer',
             expires_in: 3600,
-            id_token: jwt.sign(
-              {
-                sub: session.username,
-                iss: config.auth.jwtIssuer,
-                aud: config.auth.jwtAudience,
-                exp: now + 3600,
-                iat: now,
-                auth_time: now,
-                session_id: session.id,
-              },
-              config.auth.jwtSecret,
-            ),
+            id_token: idToken,
           });
           return;
         }
@@ -923,7 +1073,7 @@ export async function createAuthService(
       }
 
       const token = authHeader.slice(7);
-      const payload = authenticator.verifyAccessToken(token);
+      const payload = await authenticator.verifyAccessToken(token);
 
       if (!payload) {
         res.status(401).json({
@@ -1119,15 +1269,11 @@ function requestLogger(req: Request, _res: Response, next: NextFunction): void {
  */
 function corsHeaders(req: Request, res: Response, next: NextFunction): void {
   const origin = req.headers.origin;
-  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').filter(Boolean);
+  const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()).filter(Boolean);
 
-  if (allowedOrigins.length > 0 && origin) {
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-  } else {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
 
   res.setHeader(

@@ -33,6 +33,7 @@ import type {
   PluginPermissions,
   Skill,
 } from "../../shared/src/types.js";
+import * as path from "node:path";
 
 // ─── Re-exports ───────────────────────────────────────────────
 
@@ -856,6 +857,7 @@ export class PluginRegistry {
     if (this.config.healthCheckIntervalMs <= 0) return;
     if (this.healthCheckTimers.has(pluginId)) return;
 
+    const interval = Math.max(1000, this.config.healthCheckIntervalMs);
     const timer = setInterval(async () => {
       try {
         const status = await this.getHealth(pluginId);
@@ -869,7 +871,7 @@ export class PluginRegistry {
       } catch (err) {
         this.log(`Health check error for "${pluginId}": ${err}`, "warn");
       }
-    }, this.config.healthCheckIntervalMs);
+    }, interval);
 
     this.healthCheckTimers.set(pluginId, timer);
   }
@@ -880,6 +882,16 @@ export class PluginRegistry {
       clearInterval(timer);
       this.healthCheckTimers.delete(pluginId);
     }
+  }
+
+  /** Shutdown all health check timers and clear the singleton. */
+  shutdown(): void {
+    for (const [pluginId] of this.healthCheckTimers) {
+      this.stopHealthChecks(pluginId);
+    }
+    this.plugins.clear();
+    this.skills.clear();
+    this.listeners.length = 0;
   }
 
   private capitalize(str: string): string {
@@ -918,10 +930,39 @@ export class PluginRegistry {
   private createDefaultLoader(): PluginLoader {
     return {
       load: async (metadata: PluginMetadata): Promise<PluginInstance> => {
-        // Default loader: try to require the entrypoint
+        const entrypoint = metadata.entrypoint;
+        if (!entrypoint) {
+          throw new PluginError(
+            `Plugin "${metadata.id}" has no entrypoint`,
+            'INVALID_ENTRYPOINT'
+          );
+        }
+        // Reject path traversal and absolute paths
+        if (
+          entrypoint.includes('..') ||
+          path.isAbsolute(entrypoint) ||
+          /^[a-zA-Z]:[\\/]/.test(entrypoint)
+        ) {
+          throw new PluginError(
+            `Plugin "${metadata.id}" entrypoint must be a relative package path (got: "${entrypoint}")`,
+            'INVALID_ENTRYPOINT'
+          );
+        }
+        // Only allow .js, .ts, .mjs extensions or bare specifiers
+        if (
+          entrypoint.includes('/') &&
+          !/\.(js|ts|mjs|cjs)$/i.test(entrypoint) &&
+          !/^[A-Za-z@]/.test(entrypoint)
+        ) {
+          throw new PluginError(
+            `Plugin "${metadata.id}" entrypoint must be a recognized module path (got: "${entrypoint}")`,
+            'INVALID_ENTRYPOINT'
+          );
+        }
+
         try {
           // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-          const mod = require(metadata.entrypoint);
+          const mod = require(entrypoint);
           return {
             metadata,
             enabled: false,
@@ -929,27 +970,17 @@ export class PluginRegistry {
             instance: mod.default ?? mod,
           };
         } catch (err) {
-          // If loading fails, create a mock instance for testing
           this.log(
-            `Default loader could not load "${metadata.entrypoint}": ${err}. Using mock.`,
+            `Default loader could not load "${entrypoint}": ${err}`,
             "warn",
           );
-          return {
-            metadata,
-            enabled: false,
-            loaded: true,
-            instance: {
-              name: metadata.name,
-              version: metadata.version,
-              healthCheck: async () => {},
-            },
-          };
+          throw new PluginError(
+            `Failed to load plugin "${metadata.id}": ${(err as Error).message}`,
+            'LOAD_FAILED'
+          );
         }
       },
-      unload: async (_instance: PluginInstance): Promise<void> => {
-        // Default unload: cleanup references
-        // In a real system, this would call module teardown
-      },
+      unload: async (_instance: PluginInstance): Promise<void> => {},
     };
   }
 }

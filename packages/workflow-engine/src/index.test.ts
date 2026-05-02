@@ -1,3 +1,4 @@
+import { describe, it, test, expect, beforeEach } from 'vitest';
 import { WorkflowEngine } from './index.js';
 import { defineCodeReviewWorkflow, defineFailingCodeReviewWorkflow } from './review-workflow.js';
 
@@ -284,5 +285,134 @@ test('run state is queryable after execution', async () => {
   allRuns.forEach(r => {
     expect(r.id).toBeDefined();
     expect(r.createdAt).toBeDefined();
+  });
+});
+
+describe('Workflow Engine — Edge Cases', () => {
+  let engine: WorkflowEngine;
+
+  beforeEach(() => { engine = new WorkflowEngine(); });
+
+  it('handles workflow with zero steps', async () => {
+    engine.define({ name: 'empty_workflow' }, []);
+    const run = await engine.execute('empty_workflow');
+    expect(run.status).toBe('completed');
+    expect(run.steps.size).toBe(0);
+  });
+
+  it('throws on undefined workflow name', async () => {
+    await expect(engine.execute('nonexistent')).rejects.toThrow(/not found/);
+  });
+
+  it('handles step with no dependencies (single step)', async () => {
+    let executed = false;
+    engine.define({ name: 'single_step' }, [
+      { name: 'only', fn: async () => { executed = true; return { ok: true }; } },
+    ]);
+    const run = await engine.execute('single_step');
+    expect(run.status).toBe('completed');
+    expect(executed).toBe(true);
+  });
+
+  it('handles non-recoverable error (retries exhausted)', async () => {
+    let attempts = 0;
+    engine.define(
+      { name: 'non_recoverable', retry: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 100 } },
+      [
+        { name: 'fails', fn: async () => { attempts++; return { ok: false, error: 'bad', recoverable: false }; } },
+      ]
+    );
+    const run = await engine.execute('non_recoverable');
+    expect(run.status).toBe('failed');
+    expect(attempts).toBeGreaterThan(1);
+  });
+
+  it('executes compensation on successful steps only', async () => {
+    const compensated: string[] = [];
+    engine.define({ name: 'comp_test', retry: { maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100 } }, [
+      { name: 'pass', fn: async () => { return { ok: true }; }, compensation: async () => { compensated.push('pass'); } },
+      { name: 'fail', fn: async () => { return { ok: false, error: 'bad', recoverable: false }; } },
+    ]);
+
+    await engine.execute('comp_test');
+    expect(compensated).toEqual(['pass']);
+  });
+
+  it('handles simultaneous cancel during execution', async () => {
+    engine.define({ name: 'cancel_mid' }, [
+      { name: 'slow', fn: async () => { await new Promise(r => setTimeout(r, 100)); return { ok: true }; } },
+      { name: 'after', fn: async () => { return { ok: true }; } },
+    ]);
+
+    const runPromise = engine.execute('cancel_mid');
+    await new Promise(r => setTimeout(r, 10));
+    const runs = engine.listRuns();
+    const runId = runs[0]?.id;
+    if (runId) engine.cancel(runId);
+
+    const run = await runPromise;
+    expect(run.steps.get('slow')!.status).toBe('done');
+  });
+
+  it('events fire in correct lifecycle order', async () => {
+    const events: string[] = [];
+    engine.define({ name: 'event_order' }, [
+      { name: 'step_a', fn: async () => { return { ok: true }; } },
+      { name: 'step_b', fn: async () => { return { ok: true }; }, dependsOn: ['step_a'] },
+    ]);
+
+    engine.on('*', (event: string) => events.push(event));
+
+    await engine.execute('event_order');
+
+    expect(events).toContain('run:start');
+    expect(events).toContain('step:done');
+    expect(events).toContain('run:complete');
+    expect(events[0]).toBe('run:start');
+  });
+
+  it('listRuns returns all active and completed runs', async () => {
+    engine.define({ name: 'list_test' }, [
+      { name: 's', fn: async () => { return { ok: true }; } },
+    ]);
+    await engine.execute('list_test');
+    await engine.execute('list_test');
+
+    const runs = engine.listRuns();
+    expect(runs.length).toBe(2);
+  });
+
+  it('getRun returns null for unknown runId', () => {
+    expect(engine.getRun('ghost')).toBeUndefined();
+  });
+
+  it('unsubscribe returns cleanup function that works', async () => {
+    let callCount = 0;
+    const unsub = engine.on('step:done', () => { callCount++; });
+
+    engine.define({ name: 'unsub_test' }, [
+      { name: 's', fn: async () => { return { ok: true }; } },
+    ]);
+
+    await engine.execute('unsub_test');
+    expect(callCount).toBe(1);
+
+    unsub();
+    await engine.execute('unsub_test');
+    expect(callCount).toBe(1);
+  });
+
+  it('compensation runs when step in parallel block fails', async () => {
+    const compOrder: string[] = [];
+    engine.define({ name: 'parallel_comp', retry: { maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100 } }, [
+      { name: 'root', fn: async () => { return { ok: true }; } },
+      { name: 'good', fn: async () => { return { ok: true }; }, dependsOn: ['root'], compensation: async () => { compOrder.push('good'); } },
+      { name: 'bad', fn: async () => { return { ok: false, recoverable: false }; }, dependsOn: ['root'] },
+      { name: 'also_good', fn: async () => { return { ok: true }; }, dependsOn: ['root'], compensation: async () => { compOrder.push('also_good'); } },
+    ]);
+
+    await engine.execute('parallel_comp');
+    expect(compOrder).toContain('good');
+    expect(compOrder).toContain('also_good');
   });
 });

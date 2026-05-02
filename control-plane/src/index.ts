@@ -11,7 +11,7 @@
  */
 
 import { Router } from "itty-router";
-import jwt from 'jsonwebtoken';
+import { jwtVerify } from 'jose';
 import { createConfigBinding } from "./config";
 import {
   getOrchestrator,
@@ -252,7 +252,8 @@ router.get(
     try {
       const jwtSecret = (env.AUTH_JWT_SECRET as string) || process.env.AUTH_JWT_SECRET || '';
       const jwtIssuer = (env.AUTH_JWT_ISSUER as string) || process.env.AUTH_JWT_ISSUER || 'https://auth.codenexus.dev';
-      jwt.verify(token, jwtSecret, {
+      const secret = new TextEncoder().encode(jwtSecret);
+      await jwtVerify(token, secret, {
         algorithms: ['HS256'],
         issuer: jwtIssuer,
       });
@@ -302,7 +303,8 @@ router.all("/api/session/:sessionId/*", async (request: RequestWithContext) => {
   try {
     const jwtSecret = (request.env.AUTH_JWT_SECRET as string) || process.env.AUTH_JWT_SECRET || '';
     const jwtIssuer = (request.env.AUTH_JWT_ISSUER as string) || process.env.AUTH_JWT_ISSUER || 'https://auth.codenexus.dev';
-    jwt.verify(token, jwtSecret, {
+    const secret = new TextEncoder().encode(jwtSecret);
+    await jwtVerify(token, secret, {
       algorithms: ['HS256'],
       issuer: jwtIssuer,
     });
@@ -394,6 +396,58 @@ router.post(
     return jsonResponse({ message: "Run cancelled", runId });
   },
 );
+
+// ─── Workflow Engine API ───────────────────────────────────────
+
+router.get("/api/workflows/runs", async () => {
+  const orchestrator = getOrchestrator();
+  const runs = orchestrator.listWorkflowRuns();
+
+  return jsonResponse({
+    count: runs.length,
+    runs: runs.map((r) => ({
+      id: r.id,
+      workflowName: r.workflowName,
+      status: r.status,
+      stepCount: r.steps.size,
+      steps: Array.from(r.steps.entries()).map(([name, s]) => ({
+        name,
+        status: s.status,
+        attempts: s.attempts,
+        error: s.error,
+      })),
+      createdAt: r.createdAt,
+    })),
+  });
+});
+
+router.get("/api/workflows/runs/:runId", async (request: Request) => {
+  const url = new URL(request.url);
+  const runId = url.pathname.split("/").pop() ?? "";
+
+  const orchestrator = getOrchestrator();
+  const run = orchestrator.getWorkflowRun(runId);
+
+  if (!run) {
+    return jsonResponse({ error: "Workflow run not found" }, 404);
+  }
+
+  return jsonResponse({
+    id: run.id,
+    workflowName: run.workflowName,
+    status: run.status,
+    steps: Array.from(run.steps.entries()).map(([name, s]) => ({
+      name,
+      status: s.status,
+      attempts: s.attempts,
+      error: s.error,
+      startedAt: s.startedAt,
+      doneAt: s.doneAt,
+    })),
+    events: run.events,
+    createdAt: run.createdAt,
+  });
+});
 
 // ─── Orchestration Execution ──────────────────────────────────
 

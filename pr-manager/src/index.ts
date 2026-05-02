@@ -26,6 +26,9 @@ import {
   type CommentItem,
   type PRDiffFile,
   type PullRequestInfo,
+  type PRStackInfo,
+  type StackInfo,
+  GitHubClient,
   resolveToken,
   detectRepository,
   discoverCurrentPR,
@@ -116,6 +119,7 @@ const DEFAULT_WATCH_INTERVAL_MS = 30_000;
 export class PRManager {
   private config: PRManagerConfig;
   private resolvedConfig: GitHubConfig | null = null;
+  private _client: GitHubClient | null = null;
   private state: ManagerState = {
     config: { token: '', owner: '', repo: '', prNumber: 0 },
     prInfo: null,
@@ -291,6 +295,52 @@ export class PRManager {
     await unresolveThreadGQL(threadId, cfg.token);
   }
 
+  /**
+   * Lazy-initialized GitHubClient instance for GraphQL operations.
+   */
+  private get client(): GitHubClient {
+    if (!this._client) {
+      this._client = new GitHubClient(
+        this.resolvedConfig?.token,
+      );
+    }
+    return this._client;
+  }
+
+  /**
+   * Post a pull request review with inline comments via GraphQL.
+   *
+   * @param owner - Repository owner
+   * @param repo - Repository name
+   * @param prNumber - Pull request number
+   * @param commitId - Head commit OID to review
+   * @param body - Review body text
+   * @param comments - Array of inline comments with path, position, body
+   */
+  async postReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    commitId: string,
+    body: string,
+    comments: Array<{ path: string; position: number; body: string }>,
+  ): Promise<void> {
+    const mutation = `mutation($input: SubmitPullRequestReviewInput!) {
+      submitPullRequestReview(input: $input) {
+        clientMutationId
+      }
+    }`;
+    await this.client.graphqlQuery(mutation, {
+      input: {
+        pullRequestId: await this.client.getPullRequestNodeId(owner, repo, prNumber),
+        commitOID: commitId,
+        body,
+        event: 'COMMENT',
+        comments,
+      },
+    });
+  }
+
   // ─── Output ──────────────────────────────────────────────
 
   /**
@@ -451,6 +501,7 @@ export {
 
 export {
   // GitHub client
+  GitHubClient,
   resolveToken,
   detectRepository,
   discoverCurrentPR,
@@ -475,6 +526,8 @@ export type {
   CommentItem,
   PRDiffFile,
   PullRequestInfo,
+  PRStackInfo,
+  StackInfo,
   PagedResult,
   RepoIdentifier,
 } from './github-client.js';

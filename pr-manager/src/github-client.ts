@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { request } from 'node:https';
 import { env } from 'node:process';
+import { createSign } from 'node:crypto';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -73,6 +74,21 @@ export interface PullRequestInfo {
   labels: string[];
 }
 
+export interface PRStackInfo {
+  current: StackInfo;
+  parent: StackInfo | null;
+  children: StackInfo[];
+  stackHeight: number;
+  totalInStack: number;
+}
+
+export interface StackInfo {
+  number: number;
+  title: string;
+  branch: string;
+  baseBranch: string;
+}
+
 // ─── HTTP helpers ────────────────────────────────────────────
 
 interface HttpResponse {
@@ -83,7 +99,7 @@ interface HttpResponse {
 
 async function httpsFetch(
   url: string,
-  options: { method?: string; headers?: Record<string, string> } = {},
+  options: { method?: string; headers?: Record<string, string>; body?: string } = {},
 ): Promise<HttpResponse> {
   const { method = 'GET', headers = {} } = options;
   const urlObj = new URL(url);
@@ -115,6 +131,7 @@ async function httpsFetch(
       },
     );
 
+    if (options.body) req.write(options.body);
     req.on('error', reject);
     req.end();
   });
@@ -597,18 +614,18 @@ export async function graphqlQuery(
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ query, variables }),
   });
 
-  const body = JSON.parse(response.body);
-
-  if (body.errors) {
-    const messages = (body.errors as Array<{ message: string }>)
+  const respBody = JSON.parse(response.body);
+  if (respBody.errors) {
+    const messages = (respBody.errors as Array<{ message: string }>)
       .map((e) => e.message)
       .join('; ');
     throw new Error(`GraphQL error: ${messages}`);
   }
 
-  return body.data as Record<string, unknown>;
+  return respBody.data as Record<string, unknown>;
 }
 
 /**
@@ -689,4 +706,260 @@ export async function unresolveThread(
   `;
 
   await graphqlQuery(mutation, { threadId }, token);
+}
+
+// ─── GitHub App Config ────────────────────────────────────────
+
+export interface GitHubAppConfig {
+  appId: string;
+  privateKey: string;
+  installationId?: number;
+}
+
+// ─── GitHubClient ─────────────────────────────────────────────
+
+export class GitHubClient {
+  private token: string | null = null;
+  private appConfig: GitHubAppConfig | null = null;
+  private installationToken: string | null = null;
+  private installationTokenExpiry: number = 0;
+
+  constructor(token?: string, appConfig?: GitHubAppConfig) {
+    this.token = token || null;
+    this.appConfig = appConfig || null;
+  }
+
+  private async resolveAuthHeader(): Promise<string> {
+    if (this.appConfig) {
+      const token = await this.getInstallationToken();
+      return `Bearer ${token}`;
+    }
+    if (this.token) return `Bearer ${this.token}`;
+    const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    if (envToken) return `Bearer ${envToken}`;
+    throw new Error('No GitHub authentication configured');
+  }
+
+  private async getInstallationToken(): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    if (this.installationToken && now < this.installationTokenExpiry - 60) {
+      return this.installationToken;
+    }
+
+    if (!this.appConfig) throw new Error('No GitHub App config');
+
+    // Generate JWT for the GitHub App
+    const jwt = await this.generateAppJWT();
+
+    // Get installation token
+    const result = await this.httpsFetch(
+      `https://api.github.com/app/installations/${this.appConfig.installationId}/access_tokens`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'CodeNexus-PR-Manager/0.1.0',
+        },
+      },
+    );
+
+    const data = JSON.parse(result.body);
+    this.installationToken = data.token;
+    this.installationTokenExpiry = now + 3600; // tokens last 1 hour
+    return this.installationToken!;
+  }
+
+  private async generateAppJWT(): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iat: now - 60,
+      exp: now + 600,
+      iss: this.appConfig!.appId,
+    };
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const segments = [
+      Buffer.from(JSON.stringify(header)).toString('base64url'),
+      Buffer.from(JSON.stringify(payload)).toString('base64url'),
+    ];
+    const signer = createSign('RSA-SHA256');
+    signer.update(segments.join('.'));
+    const signature = signer.sign(this.appConfig!.privateKey, 'base64url');
+    return `${segments.join('.')}.${signature}`;
+  }
+
+  // ─── GraphQL ──────────────────────────────────────────────
+
+  async graphqlQuery(
+    query: string,
+    variables: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const auth = await this.resolveAuthHeader();
+    const response = await httpsFetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: auth,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+
+    const respBody = JSON.parse(response.body);
+    if (respBody.errors) {
+      const messages = (respBody.errors as Array<{ message: string }>)
+        .map((e) => e.message)
+        .join('; ');
+      throw new Error(`GraphQL error: ${messages}`);
+    }
+
+    return respBody.data as Record<string, unknown>;
+  }
+
+  // ─── PR Stack Detection ───────────────────────────────────
+
+  async getPullRequestNodeId(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<string> {
+    const query = `query($owner: String!, $repo: String!, $pr: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) { id, headRefOid }
+      }
+    }`;
+    const result = await this.graphqlQuery(query, { owner, repo, pr: prNumber });
+    return ((result.repository as Record<string, unknown>)
+      .pullRequest as Record<string, unknown>).id as string;
+  }
+
+  async getPRStack(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<PRStackInfo> {
+    const currentQuery = `query($owner: String!, $repo: String!, $pr: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) { number, title, headRefName, baseRefName }
+      }
+    }`;
+    const currentResult = await this.graphqlQuery(currentQuery, { owner, repo, pr: prNumber });
+    const currentData = ((currentResult.repository as Record<string, unknown>)
+      .pullRequest as Record<string, unknown>);
+    const current: StackInfo = {
+      number: currentData.number as number,
+      title: currentData.title as string,
+      branch: currentData.headRefName as string,
+      baseBranch: currentData.baseRefName as string,
+    };
+
+    const defaultBranch = await this.getDefaultBranch(owner, repo);
+
+    // Find parent: PR whose head branch matches this PR's base branch
+    let parent: StackInfo | null = null;
+    if (current.baseBranch !== defaultBranch) {
+      const parentQuery = `query($owner: String!, $repo: String!, $branch: String!) {
+        repository(owner: $owner, name: $repo) {
+          pullRequests(headRefName: $branch, states: OPEN, first: 1) {
+            nodes { number, title, headRefName, baseRefName }
+          }
+        }
+      }`;
+      const parentResult = await this.graphqlQuery(parentQuery, {
+        owner, repo, branch: current.baseBranch,
+      });
+      const parentNodes = (((parentResult.repository as Record<string, unknown>)
+        .pullRequests as Record<string, unknown>).nodes as Array<Record<string, unknown>>) ?? [];
+      if (parentNodes.length > 0) {
+        parent = {
+          number: parentNodes[0].number as number,
+          title: parentNodes[0].title as string,
+          branch: parentNodes[0].headRefName as string,
+          baseBranch: parentNodes[0].baseRefName as string,
+        };
+      }
+    }
+
+    const children = await this.findChildPRs(owner, repo, current.branch);
+    const stackHeight = await this.getStackHeight(owner, repo, prNumber);
+
+    return {
+      current,
+      parent,
+      children,
+      stackHeight,
+      totalInStack: 1 + children.length + (parent ? 1 : 0),
+    };
+  }
+
+  private async findChildPRs(
+    owner: string,
+    repo: string,
+    branch: string,
+  ): Promise<StackInfo[]> {
+    const query = `query($owner: String!, $repo: String!, $branch: String!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequests(baseRefName: $branch, states: OPEN, first: 10) {
+          nodes { number, title, headRefName, baseRefName }
+        }
+      }
+    }`;
+    const result = await this.graphqlQuery(query, { owner, repo, branch });
+    const nodes = ((((result.repository as Record<string, unknown>)
+      .pullRequests as Record<string, unknown>).nodes) as Array<Record<string, unknown>>) ?? [];
+    return nodes.map((n) => ({
+      number: n.number as number,
+      title: n.title as string,
+      branch: n.headRefName as string,
+      baseBranch: n.baseRefName as string,
+    }));
+  }
+
+  private async getStackHeight(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<number> {
+    const query = `query($owner: String!, $repo: String!, $pr: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) { number, baseRefName }
+      }
+    }`;
+    const result = await this.graphqlQuery(query, { owner, repo, pr: prNumber });
+    const prData = ((result.repository as Record<string, unknown>)
+      .pullRequest as Record<string, unknown>);
+    const baseBranch = prData.baseRefName as string;
+
+    const defaultBranch = await this.getDefaultBranch(owner, repo);
+    if (baseBranch === defaultBranch) return 1;
+
+    const parentQuery = `query($owner: String!, $repo: String!, $branch: String!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequests(headRefName: $branch, states: OPEN, first: 1) {
+          nodes { number }
+        }
+      }
+    }`;
+    const parentResult = await this.graphqlQuery(parentQuery, {
+      owner, repo, branch: baseBranch,
+    });
+    const parentNodes = (((parentResult.repository as Record<string, unknown>)
+      .pullRequests as Record<string, unknown>).nodes as Array<Record<string, unknown>>) ?? [];
+
+    if (parentNodes.length === 0) return 1;
+    return 1 + await this.getStackHeight(owner, repo, parentNodes[0].number as number);
+  }
+
+  private async getDefaultBranch(
+    owner: string,
+    repo: string,
+  ): Promise<string> {
+    const query = `query($owner: String!, $repo: String!) {
+      repository(owner: $owner, name: $repo) {
+        defaultBranchRef { name }
+      }
+    }`;
+    const result = await this.graphqlQuery(query, { owner, repo });
+    return (((result.repository as Record<string, unknown>)
+      .defaultBranchRef as Record<string, unknown>).name) as string;
+  }
 }

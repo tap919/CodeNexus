@@ -564,9 +564,9 @@ import type { Request, Response, NextFunction } from "express";
  */
 export function createAuthorizationMiddleware(
   authorizer: Authorizer,
-  getSession: (req: Request) => UserSession | null,
+  getSession: (req: Request) => Promise<UserSession | null> | UserSession | null,
 ) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const context: RequestContext = {
       domain: req.hostname,
       resource: req.path,
@@ -575,7 +575,7 @@ export function createAuthorizationMiddleware(
       raw: req as unknown as IncomingMessage,
     };
 
-    const session = getSession(req);
+    const session = await getSession(req);
     const result = authorizer.authorize(context, session);
 
     if (!result.allowed) {

@@ -10,9 +10,85 @@
  * search strategies.
  */
 
-import { TfIdf, WordTokenizer } from 'natural';
 import type { SearchResult } from '../../shared/src/types';
 import type { TextChunk } from './document-processor';
+
+// ─── Internal Tokenizer ──────────────────────────────────────
+
+function tokenize(text: string): string[] {
+  return text.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 2);
+}
+
+// ─── Internal TF-IDF ─────────────────────────────────────────
+
+class SimpleTFIDF {
+  private documents: Map<string, Map<string, number>> = new Map();
+  private docCount = 0;
+
+  addDocument(id: string, terms: string[]): void {
+    const tf = new Map<string, number>();
+    for (const term of terms) {
+      tf.set(term, (tf.get(term) || 0) + 1);
+    }
+    const maxFreq = Math.max(...tf.values(), 1);
+    for (const [term, freq] of tf) {
+      tf.set(term, freq / maxFreq);
+    }
+    this.documents.set(id, tf);
+    this.docCount++;
+  }
+
+  search(queryTerms: string[]): { id: string; score: number }[] {
+    const df = new Map<string, number>();
+    for (const [, tf] of this.documents) {
+      for (const term of queryTerms) {
+        if (tf.has(term)) df.set(term, (df.get(term) || 0) + 1);
+      }
+    }
+
+    const results: { id: string; score: number }[] = [];
+    for (const [id, tf] of this.documents) {
+      let score = 0;
+      for (const term of queryTerms) {
+        const docFreq = df.get(term) || 0;
+        if (docFreq === 0) continue;
+        const idf = Math.log((this.docCount + 1) / (docFreq + 1)) + 1;
+        score += (tf.get(term) || 0) * idf;
+      }
+      if (score > 0) results.push({ id, score });
+    }
+    return results.sort((a, b) => b.score - a.score);
+  }
+}
+
+// ─── Internal Inverted Index ─────────────────────────────────
+
+class SimpleInvertedIndex {
+  private index = new Map<string, Set<string>>();
+
+  addDocument(id: string, terms: string[]): void {
+    for (const term of terms) {
+      if (!this.index.has(term)) this.index.set(term, new Set());
+      this.index.get(term)!.add(id);
+    }
+  }
+
+  search(term: string): string[] {
+    return [...(this.index.get(term.toLowerCase()) || [])];
+  }
+
+  searchMulti(terms: string[]): Map<string, number> {
+    const scores = new Map<string, number>();
+    for (const term of terms) {
+      const docs = this.index.get(term.toLowerCase());
+      if (docs) docs.forEach(id => scores.set(id, (scores.get(id) || 0) + 1));
+    }
+    return scores;
+  }
+}
 
 // ─── Additional Types ─────────────────────────────────────────
 
@@ -76,12 +152,6 @@ export interface EquationResult {
 
 // ─── Internal Index Types ────────────────────────────────────
 
-interface FtsEntry {
-  term: string;
-  chunkId: string;
-  positions: number[];
-}
-
 interface IndexedChunk {
   chunk: TextChunk;
   docTitle: string;
@@ -110,7 +180,7 @@ const EQUATION_PATTERN = /(?:\\[\(\[\{]|\\[\)\]\}]|\\begin\{equation\}|\\end\{eq
  *
  * Implements:
  * - FTS5-style keyword search with term-position ranking.
- * - TF-IDF vector similarity via the `natural` NLP library.
+ * - TF-IDF vector similarity via internal SimpleTFIDF.
  * - Hybrid RRF (Reciprocal Rank Fusion) merging.
  * - Figure / table / equation specialised searches.
  * - Related concept discovery.
@@ -124,13 +194,13 @@ const EQUATION_PATTERN = /(?:\\[\(\[\{]|\\[\)\]\}]|\\begin\{equation\}|\\end\{eq
  */
 export class SearchEngine {
   private indexedChunks: IndexedChunk[] = [];
-  private ftsIndex: Map<string, FtsEntry[]> = new Map();
-  private tfidf: TfIdf;
-  private tokenizer: WordTokenizer;
+  private chunkMap: Map<string, IndexedChunk> = new Map();
+  private ftsIndex: SimpleInvertedIndex;
+  private tfidf: SimpleTFIDF;
 
   constructor() {
-    this.tfidf = new TfIdf();
-    this.tokenizer = new WordTokenizer();
+    this.tfidf = new SimpleTFIDF();
+    this.ftsIndex = new SimpleInvertedIndex();
   }
 
   // ── Indexing ────────────────────────────────────────────
@@ -145,28 +215,23 @@ export class SearchEngine {
     for (const [docTitle, { chunks, format }] of chunksByDoc) {
       for (const chunk of chunks) {
         const tokens = this.tokenizeWithPositions(chunk.text);
+        const terms = tokens.map((t) => t.term);
 
-        this.indexedChunks.push({
+        const entry: IndexedChunk = {
           chunk,
           docTitle,
           docFormat: format,
           tokens,
-        });
+        };
 
-        // Build FTS index.
-        for (const { term, positions } of tokens) {
-          if (!this.ftsIndex.has(term)) {
-            this.ftsIndex.set(term, []);
-          }
-          this.ftsIndex.get(term)!.push({
-            term,
-            chunkId: chunk.id,
-            positions,
-          });
-        }
+        this.indexedChunks.push(entry);
+        this.chunkMap.set(chunk.id, entry);
+
+        // Build inverted index.
+        this.ftsIndex.addDocument(chunk.id, terms);
 
         // Feed into TF-IDF.
-        this.tfidf.addDocument(tokens.map((t) => t.term));
+        this.tfidf.addDocument(chunk.id, terms);
       }
     }
   }
@@ -176,8 +241,9 @@ export class SearchEngine {
    */
   clear(): void {
     this.indexedChunks = [];
-    this.ftsIndex.clear();
-    this.tfidf = new TfIdf();
+    this.chunkMap.clear();
+    this.ftsIndex = new SimpleInvertedIndex();
+    this.tfidf = new SimpleTFIDF();
   }
 
   // ── FTS5-style Keyword Search ───────────────────────────
@@ -192,28 +258,28 @@ export class SearchEngine {
    * @returns      Results sorted by decreasing relevance.
    */
   ftsSearch(query: string, limit = DEFAULT_LIMIT): SearchResult[] {
-    const queryTerms = this.tokenizer
-      .tokenize(query.toLowerCase())
-      .filter((t) => t.length >= 2);
-
+    const queryTerms = tokenize(query);
     if (queryTerms.length === 0) return [];
 
-    // Score each indexed chunk.
+    // Use inverted index to find candidate chunks.
+    const candidates = this.ftsIndex.searchMulti(queryTerms);
+    if (candidates.size === 0) return [];
+
+    // Score each candidate chunk.
     const scores = new Map<string, { chunk: IndexedChunk; score: number }>();
 
-    for (const idx of this.indexedChunks) {
-      let score = 0;
+    for (const [chunkId, matchCount] of candidates) {
+      const idx = this.chunkMap.get(chunkId);
+      if (!idx) continue;
+
+      let score = matchCount;
       let matchedTerms = 0;
 
       for (const qt of queryTerms) {
-        const idxTokens = idx.tokens.filter(
-          (t) => t.term === qt,
-        );
+        const idxTokens = idx.tokens.filter((t) => t.term === qt);
 
         if (idxTokens.length > 0) {
           matchedTerms++;
-          // TF component.
-          score += idxTokens.length / Math.max(1, idx.tokens.length);
 
           // Proximity bonus: if multiple query terms appear close together.
           const allPositions = idxTokens.flatMap((t) => t.positions).sort((a, b) => a - b);
@@ -258,25 +324,15 @@ export class SearchEngine {
    * @returns      Results sorted by decreasing cosine similarity.
    */
   tfidfSearch(query: string, limit = DEFAULT_LIMIT): SearchResult[] {
-    // Use natural's built-in tfidf similarity.
-    const queryTokens = this.tokenizer.tokenize(query.toLowerCase()) ?? [];
+    const queryTokens = tokenize(query);
     if (queryTokens.length === 0) return [];
 
-    // Measure similarity against every document.
-    const sims: { docIndex: number; score: number }[] = [];
+    const sims = this.tfidf.search(queryTokens);
 
-    this.tfidf.tfidfs(queryTokens, (docIndex: number, score: number) => {
-      if (score > 0) {
-        sims.push({ docIndex, score });
-      }
-    });
-
-    // Map back to indexed chunks.
     return sims
-      .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map(({ docIndex, score }) => {
-        const idx = this.indexedChunks[docIndex];
+      .map(({ id, score }) => {
+        const idx = this.chunkMap.get(id);
         if (!idx) return null;
         return {
           bookId: idx.chunk.id,
@@ -337,7 +393,7 @@ export class SearchEngine {
       if (combinedRRF < minScore) continue;
 
       // Find the indexed chunk.
-      const idx = this.indexedChunks.find((i) => i.chunk.id === chunkId);
+      const idx = this.chunkMap.get(chunkId);
       if (!idx) continue;
 
       // Normalise the RRF score so the top result ≈ 1.0.
@@ -547,20 +603,18 @@ export class SearchEngine {
    * Tokenise text and record word positions.
    */
   private tokenizeWithPositions(text: string): { term: string; positions: number[] }[] {
-    const lower = text.toLowerCase();
-    const tokens = this.tokenizer.tokenize(lower) ?? [];
+    const tokens = tokenize(text);
 
-    const result: { term: string; positions: number[] }[] = [];
     const termMap = new Map<string, number[]>();
 
     tokens.forEach((token, index) => {
-      if (token.length < 2) return;
       if (!termMap.has(token)) {
         termMap.set(token, []);
       }
       termMap.get(token)!.push(index);
     });
 
+    const result: { term: string; positions: number[] }[] = [];
     for (const [term, positions] of termMap) {
       result.push({ term, positions });
     }

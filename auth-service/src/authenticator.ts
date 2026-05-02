@@ -10,8 +10,7 @@
 
 import * as crypto from 'node:crypto';
 import argon2 from 'argon2';
-import { authenticator as otplibAuthenticator } from 'otplib/v11';
-import jwt from 'jsonwebtoken';
+import { SignJWT, jwtVerify } from 'jose';
 import {
   AuthLevel,
   UserSession,
@@ -192,13 +191,90 @@ export class FileUserProvider implements UserProvider {
   }
 }
 
+// ─── Native TOTP (RFC 6238) ──────────────────────────────────
+
+function base32Encode(buf: Buffer): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0;
+  let value = 0;
+  let result = '';
+  for (let i = 0; i < buf.length; i++) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) {
+      result += alphabet[(value >>> (bits - 5)) & 0x1f];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    result += alphabet[(value << (5 - bits)) & 0x1f];
+  }
+  return result;
+}
+
+function generateTOTPSecret(length = 20): string {
+  return base32Encode(crypto.randomBytes(length));
+}
+
+function base32Decode(str: string): Buffer {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  str = str.toUpperCase().replace(/=+$/, '').replace(/\s/g, '');
+  const bits: number[] = [];
+  for (const char of str) {
+    const val = alphabet.indexOf(char);
+    if (val === -1) throw new Error('Invalid base32 character');
+    bits.push(val >> 4 & 1, val >> 3 & 1, val >> 2 & 1, val >> 1 & 1, val & 1);
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i + 7 < bits.length; i += 8) {
+    bytes.push((bits[i] << 7) | (bits[i + 1] << 6) | (bits[i + 2] << 5) | (bits[i + 3] << 4) |
+               (bits[i + 4] << 3) | (bits[i + 5] << 2) | (bits[i + 6] << 1) | bits[i + 7]);
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTOTP(secret: string, digits = 6, period = 30): string {
+  const counter = Math.floor(Date.now() / 1000 / period);
+  const counterBuf = Buffer.alloc(8);
+  counterBuf.writeBigUInt64BE(BigInt(counter), 0);
+  const key = base32Decode(secret);
+  const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const code = ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return (code % 10 ** digits).toString().padStart(digits, '0');
+}
+
+function verifyTOTP(token: string, secret: string, window = 1): boolean {
+  for (let w = -window; w <= window; w++) {
+    const counter = Math.floor(Date.now() / 1000 / 30) + w;
+    const counterBuf = Buffer.alloc(8);
+    counterBuf.writeBigUInt64BE(BigInt(Math.max(0, counter)), 0);
+    try {
+      const key = base32Decode(secret);
+      const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
+      const offset = hmac[hmac.length - 1] & 0x0f;
+      const code = ((hmac[offset] & 0x7f) << 24) |
+        ((hmac[offset + 1] & 0xff) << 16) |
+        ((hmac[offset + 2] & 0xff) << 8) |
+        (hmac[offset + 3] & 0xff);
+      const expected = (code % 10 ** 6).toString().padStart(6, '0');
+      if (token === expected) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 // ─── Authenticator Class ────────────────────────────────────
 
 export class Authenticator {
   private readonly config: Required<AuthenticatorConfig>;
   private readonly sessionStore: SessionStore;
   private userProvider: UserProvider;
-  private readonly totpAuthenticator: typeof otplibAuthenticator;
 
   constructor(
     config: AuthenticatorConfig,
@@ -212,15 +288,6 @@ export class Authenticator {
     };
     this.sessionStore = sessionStore;
     this.userProvider = userProvider;
-
-    // Configure otplib authenticator
-    this.totpAuthenticator = otplibAuthenticator;
-    this.totpAuthenticator.options = {
-      step: 30,
-      window: 1,
-      digits: 6,
-      algorithm: 'sha1' as const,
-    };
   }
 
   /** Replace the user provider at runtime (e.g., swap file → LDAP). */
@@ -312,8 +379,8 @@ export class Authenticator {
     const encryptedCookie = await this.sessionStore.createSession(session);
 
     // Generate a one-time JWT for OIDC token exchange
-    const accessToken = this.generateAccessToken(session);
-    const refreshToken = this.generateRefreshToken(session);
+    const accessToken = await this.generateAccessToken(session);
+    const refreshToken = await this.generateRefreshToken(session);
 
     return {
       success: true,
@@ -361,7 +428,7 @@ export class Authenticator {
     }
 
     // 3. Validate token
-    const isValid = this.totpAuthenticator.check(token, secret);
+    const isValid = verifyTOTP(token, secret);
     if (!isValid) {
       return {
         success: false,
@@ -394,20 +461,14 @@ export class Authenticator {
   async enrollTOTP(
     username: string
   ): Promise<{ secret: string; uri: string; qrCodeUrl: string }> {
-    const secret = this.totpAuthenticator.generateSecret();
+    const secret = generateTOTPSecret();
     await this.userProvider.setTOTPSecret(username, secret);
 
-    const uri = this.totpAuthenticator.keyuri(
-      username,
-      this.config.totpIssuer,
-      secret
-    );
+    const label = encodeURIComponent(`${this.config.totpIssuer}:${username}`);
+    const issuer = encodeURIComponent(this.config.totpIssuer);
+    const uri = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
 
-    // Generate a QR code URL using the standard otpauth protocol
-    const encodedUri = encodeURIComponent(uri);
-    const qrCodeUrl = `otpauth://totp/${encodedUri}`;
-
-    return { secret, uri, qrCodeUrl };
+    return { secret, uri, qrCodeUrl: uri };
   }
 
   /**
@@ -479,19 +540,18 @@ export class Authenticator {
    * Generate a signed JWT access token for OIDC flows.
    * Uses HS256 for HMAC secrets, RS256 for RSA keys.
    */
-  generateAccessToken(session: UserSession, scopes?: string[]): string {
+  async generateAccessToken(session: UserSession, scopes?: string[]): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     const amr = SessionStore.buildAmrClaims(
       session.authenticationLevel,
       session.authenticationMethods
     );
+    const secret = new TextEncoder().encode(this.config.jwtSecret);
+    const alg = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
 
     const payload: Record<string, unknown> = {
       sub: session.username,
-      iss: this.config.jwtIssuer,
       aud: this.config.jwtAudience,
-      exp: now + this.config.sessionTtlSeconds,
-      iat: now,
       auth_time: Math.floor(new Date(session.createdAt).getTime() / 1000),
       amr,
       groups: session.groups,
@@ -509,11 +569,12 @@ export class Authenticator {
       payload.email_verified = true;
     }
 
-    const algorithm = this.config.jwtSecret.includes('-----BEGIN')
-      ? 'RS256'
-      : 'HS256';
-
-    return jwt.sign(payload, this.config.jwtSecret, { algorithm });
+    return new SignJWT(payload)
+      .setProtectedHeader({ alg })
+      .setIssuer(this.config.jwtIssuer)
+      .setIssuedAt(now)
+      .setExpirationTime(now + this.config.sessionTtlSeconds)
+      .sign(secret);
   }
 
   /**
@@ -521,39 +582,40 @@ export class Authenticator {
    * Uses HS256 for HMAC secrets, RS256 for RSA keys.
    * Refresh tokens have a 24x longer TTL than access tokens.
    */
-  generateRefreshToken(session: UserSession): string {
+  async generateRefreshToken(session: UserSession): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
-    const algorithm = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
-    return jwt.sign(
-      {
-        sub: session.username,
-        iss: this.config.jwtIssuer,
-        aud: this.config.jwtAudience,
-        exp: now + (this.config.sessionTtlSeconds ?? 3600) * 24,
-        iat: now,
-        jti: crypto.randomUUID(),
-        session_id: session.id,
-        token_type: 'refresh',
-      },
-      this.config.jwtSecret,
-      { algorithm }
-    );
+    const secret = new TextEncoder().encode(this.config.jwtSecret);
+    const alg = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
+
+    return new SignJWT({
+      sub: session.username,
+      aud: this.config.jwtAudience,
+      iat: now,
+      jti: crypto.randomUUID(),
+      session_id: session.id,
+      token_type: 'refresh',
+    })
+      .setProtectedHeader({ alg })
+      .setIssuer(this.config.jwtIssuer)
+      .setExpirationTime(now + (this.config.sessionTtlSeconds ?? 3600) * 24)
+      .sign(secret);
   }
 
   /**
    * Verify and decode a refresh token. Returns the payload or null.
    * Only accepts tokens with token_type === 'refresh'.
    */
-  verifyRefreshToken(token: string): Record<string, unknown> | null {
+  async verifyRefreshToken(token: string): Promise<Record<string, unknown> | null> {
     try {
-      const algorithm = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
-      const decoded = jwt.verify(token, this.config.jwtSecret, {
-        algorithms: [algorithm],
+      const secret = new TextEncoder().encode(this.config.jwtSecret);
+      const alg = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
+      const { payload } = await jwtVerify(token, secret, {
+        algorithms: [alg],
         issuer: this.config.jwtIssuer,
         audience: this.config.jwtAudience,
-      }) as Record<string, unknown>;
-      if (decoded.token_type !== 'refresh') return null;
-      return decoded;
+      });
+      if (payload.token_type !== 'refresh') return null;
+      return payload as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -563,18 +625,16 @@ export class Authenticator {
    * Verify and decode an access token. Returns the payload or null.
    * Restricts accepted algorithms to prevent algorithm confusion attacks.
    */
-  verifyAccessToken(token: string): Record<string, unknown> | null {
+  async verifyAccessToken(token: string): Promise<Record<string, unknown> | null> {
     try {
-      const algorithm = this.config.jwtSecret.includes('-----BEGIN')
-        ? 'RS256'
-        : 'HS256';
-
-      const decoded = jwt.verify(token, this.config.jwtSecret, {
+      const secret = new TextEncoder().encode(this.config.jwtSecret);
+      const alg = this.config.jwtSecret.includes('-----BEGIN') ? 'RS256' : 'HS256';
+      const { payload } = await jwtVerify(token, secret, {
         issuer: this.config.jwtIssuer,
         audience: this.config.jwtAudience,
-        algorithms: [algorithm],
-      }) as Record<string, unknown>;
-      return decoded;
+        algorithms: [alg],
+      });
+      return payload as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -589,7 +649,7 @@ export class Authenticator {
     const secret = await this.userProvider.getTOTPSecret(username);
     if (!secret) return false;
     try {
-      return this.totpAuthenticator.check(token, secret);
+      return verifyTOTP(token, secret);
     } catch {
       return false;
     }

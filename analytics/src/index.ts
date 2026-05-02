@@ -19,7 +19,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import jwt from 'jsonwebtoken';
+import { jwtVerify } from 'jose';
+import Database from 'better-sqlite3';
 import type { Router, Request, Response, NextFunction } from 'express';
 import type {
   ReviewMetric,
@@ -82,27 +83,95 @@ export interface ReportEvent {
   timestamp: string;
 }
 
+// ─── AnalyticsCollectorConfig ────────────────────────────────
+
+export interface AnalyticsCollectorConfig {
+  dbPath?: string; // If provided, enables SQLite persistence
+}
+
 // ─── AnalyticsCollector ───────────────────────────────────────
 
 export class AnalyticsCollector {
-  private metrics: ReviewMetric[] = [];
-  private events: ReportEvent[] = [];
-  private timeSeriesData: Map<string, TimeSeriesPoint[]> = new Map();
+  private db: Database.Database | null = null;
+  private inMemoryMetrics: ReviewMetric[] = [];
+  private inMemoryEvents: ReportEvent[] = [];
+  private inMemoryTimeSeries: Map<string, TimeSeriesPoint[]> = new Map();
   private listeners: Set<(metric: ReviewMetric) => void> = new Set();
+
+  constructor(config?: AnalyticsCollectorConfig) {
+    if (config?.dbPath) {
+      this.db = new Database(config.dbPath);
+      this.db.pragma('journal_mode = WAL');
+      this.initSchema();
+    }
+  }
+
+  private initSchema(): void {
+    if (!this.db) return;
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS metrics (
+        id TEXT PRIMARY KEY,
+        pr_number INTEGER NOT NULL,
+        repository TEXT NOT NULL,
+        total_comments INTEGER DEFAULT 0,
+        bot_comments INTEGER DEFAULT 0,
+        human_comments INTEGER DEFAULT 0,
+        fixes_applied INTEGER DEFAULT 0,
+        time_to_fix REAL DEFAULT 0,
+        confidence REAL DEFAULT 0,
+        timestamp TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS time_series (
+        id TEXT PRIMARY KEY,
+        metric TEXT NOT NULL,
+        point_date TEXT NOT NULL,
+        value REAL DEFAULT 0,
+        repository TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_metrics_repo ON metrics(repository);
+      CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
+    `);
+  }
 
   // ── Metric Recording ───────────────────────────────────
 
   /**
    * Record a review metric.
    */
-  async recordMetric(metric: ReviewMetric): Promise<string> {
+  async recordMetric(metric: ReviewMetric): Promise<{ id: string; status: string }> {
     const id = uuidv4();
     const enriched: ReviewMetric = {
       ...metric,
       timestamp: metric.timestamp ?? new Date().toISOString(),
     };
 
-    this.metrics.push(enriched);
+    this.inMemoryMetrics.push(enriched);
+
+    // Persist to SQLite if enabled
+    if (this.db) {
+      const stmt = this.db.prepare(
+        `INSERT INTO metrics (id, pr_number, repository, total_comments, bot_comments, human_comments, fixes_applied, time_to_fix, confidence, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      stmt.run(
+        id,
+        metric.prNumber,
+        metric.repository,
+        metric.totalComments,
+        metric.botComments,
+        metric.humanComments,
+        metric.fixesApplied,
+        metric.timeToFix,
+        metric.confidence,
+        metric.timestamp ?? new Date().toISOString(),
+      );
+    }
 
     // Add to time-series
     this.addTimeSeriesPoint('prs_reviewed', 1, enriched.repository);
@@ -118,13 +187,13 @@ export class AnalyticsCollector {
       }
     }
 
-    return id;
+    return { id, status: 'recorded' };
   }
 
   /**
    * Record a generic analytics event.
    */
-  async recordEvent(event: string, data: Record<string, unknown>): Promise<string> {
+  async recordEvent(event: string, data: Record<string, unknown>): Promise<{ id: string; status: string }> {
     const sanitized = this.sanitizePII(data);
     const id = uuidv4();
     const reportEvent: ReportEvent = {
@@ -134,10 +203,19 @@ export class AnalyticsCollector {
       timestamp: new Date().toISOString(),
     };
 
-    this.events.push(reportEvent);
+    this.inMemoryEvents.push(reportEvent);
+
+    // Persist to SQLite if enabled (with sanitized PII)
+    if (this.db) {
+      const stmt = this.db.prepare(
+        `INSERT INTO events (id, type, data, timestamp) VALUES (?, ?, ?, ?)`,
+      );
+      stmt.run(id, event, JSON.stringify(sanitized), new Date().toISOString());
+    }
+
     this.addTimeSeriesPoint('events', 1);
 
-    return id;
+    return { id, status: 'recorded' };
   }
 
   /**
@@ -154,7 +232,7 @@ export class AnalyticsCollector {
    * Get aggregated metrics across all records.
    */
   aggregate(filter?: { repository?: string; since?: string }): AggregatedMetrics {
-    let filtered = this.metrics;
+    let filtered = this.inMemoryMetrics;
 
     if (filter?.repository) {
       filtered = filtered.filter(m => m.repository === filter.repository);
@@ -216,7 +294,7 @@ export class AnalyticsCollector {
         .slice(0, 10)
         .map(r => r.repository),
       recentActivity,
-      securityAlerts: this.events.filter(e => e.type === 'security_alert').length,
+      securityAlerts: this.inMemoryEvents.filter(e => e.type === 'security_alert').length,
     };
   }
 
@@ -230,7 +308,7 @@ export class AnalyticsCollector {
       ? `${options.metric}:${options.repository}`
       : options.metric;
 
-    let data = this.timeSeriesData.get(key) ?? [];
+    let data = this.inMemoryTimeSeries.get(key) ?? [];
 
     // Apply time range filter
     if (options.from) {
@@ -291,7 +369,7 @@ export class AnalyticsCollector {
     const repos = this.getRepositoryList();
 
     return repos.map(repo => {
-      const repoMetrics = this.metrics.filter(m => m.repository === repo);
+      const repoMetrics = this.inMemoryMetrics.filter(m => m.repository === repo);
       const aggregated = this.aggregate({ repository: repo });
 
       const lastActivity = repoMetrics.length > 0
@@ -319,7 +397,7 @@ export class AnalyticsCollector {
    * Get recent metrics up to a limit.
    */
   getRecentMetrics(limit: number = 10): ReviewMetric[] {
-    return [...this.metrics]
+    return [...this.inMemoryMetrics]
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, limit);
   }
@@ -329,25 +407,41 @@ export class AnalyticsCollector {
    */
   getEvents(type?: string): ReportEvent[] {
     if (type) {
-      return this.events.filter(e => e.type === type);
+      return this.inMemoryEvents.filter(e => e.type === type);
     }
-    return [...this.events];
+    return [...this.inMemoryEvents];
   }
 
   /**
    * Get all recorded metrics.
    */
   getAllMetrics(): ReviewMetric[] {
-    return [...this.metrics];
+    if (this.db) {
+      return this.db.prepare('SELECT * FROM metrics ORDER BY timestamp DESC').all() as ReviewMetric[];
+    }
+    return [...this.inMemoryMetrics];
   }
 
   /**
    * Clear all stored data.
    */
-  clear(): void {
-    this.metrics = [];
-    this.events = [];
-    this.timeSeriesData.clear();
+  async clearAll(): Promise<void> {
+    this.inMemoryMetrics = [];
+    this.inMemoryEvents = [];
+    this.inMemoryTimeSeries.clear();
+    if (this.db) {
+      this.db.exec('DELETE FROM metrics; DELETE FROM events; DELETE FROM time_series;');
+    }
+  }
+
+  /**
+   * Close the SQLite database connection if open.
+   */
+  close(): void {
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
   }
 
   // ── Private Methods ────────────────────────────────────
@@ -355,11 +449,11 @@ export class AnalyticsCollector {
   private addTimeSeriesPoint(metric: string, value: number, repository?: string): void {
     const key = repository ? `${metric}:${repository}` : metric;
 
-    if (!this.timeSeriesData.has(key)) {
-      this.timeSeriesData.set(key, []);
+    if (!this.inMemoryTimeSeries.has(key)) {
+      this.inMemoryTimeSeries.set(key, []);
     }
 
-    this.timeSeriesData.get(key)!.push({
+    this.inMemoryTimeSeries.get(key)!.push({
       timestamp: new Date().toISOString(),
       value,
       metric,
@@ -374,7 +468,7 @@ export class AnalyticsCollector {
 
   private getRepositoryList(): string[] {
     const repos = new Set<string>();
-    for (const m of this.metrics) {
+    for (const m of this.inMemoryMetrics) {
       if (m.repository) repos.add(m.repository);
     }
     return Array.from(repos);
@@ -460,20 +554,24 @@ export class AnalyticsCollector {
  *   POST /api/analytics/clear    — Clear all data
  *   GET  /api/analytics/health   — Health check
  */
-function analyticsAuth(req: Request, res: Response, next: NextFunction): void {
+async function analyticsAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) {
     res.status(401).json({ error: 'authentication_required' });
     return;
   }
   try {
-    const payload = jwt.verify(token, process.env.AUTH_JWT_SECRET ?? '', {
-      algorithms: ['HS256'],
+    const secret = new TextEncoder().encode(process.env.AUTH_JWT_SECRET || '');
+    const { payload } = await jwtVerify(token, secret, {
       issuer: process.env.AUTH_JWT_ISSUER || 'https://auth.codenexus.dev',
+      algorithms: ['HS256'],
     });
     (res.locals as any).authPayload = payload;
     next();
-  } catch {
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[Analytics] JWT verification failed:', (err as Error).message);
+    }
     res.status(401).json({ error: 'invalid_token' });
   }
 }
@@ -496,8 +594,8 @@ export function createAnalyticsRouter(collector: AnalyticsCollector): Router {
           });
         }
 
-        const id = await collector.recordMetric(metric);
-        return res.status(201).json({ id, status: 'recorded' });
+        const result = await collector.recordMetric(metric);
+        return res.status(201).json(result);
       } catch (err) {
         return res.status(500).json({ error: String(err) });
       }
@@ -512,8 +610,8 @@ export function createAnalyticsRouter(collector: AnalyticsCollector): Router {
           return res.status(400).json({ error: 'Missing required field: type' });
         }
 
-        const id = await collector.recordEvent(type, data ?? {});
-        return res.status(201).json({ id, status: 'recorded' });
+        const result = await collector.recordEvent(type, data ?? {});
+        return res.status(201).json(result);
       } catch (err) {
         return res.status(500).json({ error: String(err) });
       }
@@ -613,14 +711,14 @@ export function createAnalyticsRouter(collector: AnalyticsCollector): Router {
     });
 
     // ── POST /clear ──────────────────────────────────────
-    router.post('/clear', analyticsAuth, (_req: Request, res: Response) => {
+    router.post('/clear', analyticsAuth, async (_req: Request, res: Response) => {
       try {
         const payload = (res.locals as any).authPayload;
         const groups = (payload?.groups as string[]) || [];
         if (!groups.includes('admin')) {
           return res.status(403).json({ error: 'forbidden' });
         }
-        collector.clear();
+        await collector.clearAll();
         return res.json({ cleared: true });
       } catch (err) {
         return res.status(500).json({ error: String(err) });

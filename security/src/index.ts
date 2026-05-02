@@ -38,8 +38,17 @@ import type { AgentAction, DriftResult } from './detectors/behavioral-drift';
 import { SecretsScanner } from './detectors/secrets-scanner';
 import type { ScanResult } from './detectors/secrets-scanner';
 
+import { SemgrepScanner } from './detectors/semgrep';
+import type { SemgrepFinding } from './detectors/semgrep';
+
 import { TrustScoreEngine } from './trust-score';
 import type { TrustFactor, TrustScoreResult } from './trust-score';
+
+// AST Analyzers (side-effect imports register themselves)
+import './ast-analyzers/typescript';
+import './ast-analyzers/python';
+import './ast-analyzers/java';
+import { analyzeFile as analyzeAST, getSupportedLanguages as getASTLangs, type ASTFinding } from './ast-analyzers/index';
 
 // ─── Type Exports ─────────────────────────────────────────────
 
@@ -55,8 +64,13 @@ export type { AgentAction, DriftResult, BehaviorBaseline, DriftWindow } from './
 export { SecretsScanner } from './detectors/secrets-scanner';
 export type { ScanResult, SecretMatch } from './detectors/secrets-scanner';
 
+export { SemgrepScanner } from './detectors/semgrep';
+export type { SemgrepFinding } from './detectors/semgrep';
+
 export { TrustScoreEngine } from './trust-score';
 export type { TrustFactor, TrustScoreResult, TrustScoreConfig } from './trust-score';
+
+export type { ASTFinding } from './ast-analyzers/index';
 
 // ─── SecurityManager Configuration ────────────────────────────
 
@@ -117,6 +131,7 @@ export class SecurityManager {
   public readonly dataExfiltration: DataExfiltrationDetector;
   public readonly behavioralDrift: BehavioralDriftDetector;
   public readonly secretsScanner: SecretsScanner;
+  public readonly semgrep: SemgrepScanner;
   public readonly trustScore: TrustScoreEngine;
   private embeddingDetector: EmbeddingInjectionDetector;
   private config: SecurityManagerConfig;
@@ -136,6 +151,7 @@ export class SecurityManager {
     this.dataExfiltration = new DataExfiltrationDetector();
     this.behavioralDrift = new BehavioralDriftDetector();
     this.secretsScanner = new SecretsScanner();
+    this.semgrep = new SemgrepScanner();
     this.embeddingDetector = new EmbeddingInjectionDetector();
     this.trustScore = new TrustScoreEngine({
       alertThreshold: this.config.alertThreshold,
@@ -402,6 +418,30 @@ export class SecurityManager {
       byType: this.countByType(alerts),
       activeAgentCount: this.trustScore.getAllScores().size,
     };
+  }
+
+  /**
+   * Run Semgrep SAST scan against a target path.
+   * Delegates to the SemgrepScanner and returns parsed findings.
+   */
+  async runSemgrep(targetPath: string): Promise<SemgrepFinding[]> {
+    return this.semgrep.scan(targetPath);
+  }
+
+  // ── AST Analysis ──────────────────────────────────────
+
+  /**
+   * Analyze a source file using the registered AST language analyzer.
+   */
+  analyzeFileAST(filePath: string, content: string): ASTFinding[] {
+    return analyzeAST(filePath, content);
+  }
+
+  /**
+   * Return the list of languages supported by AST analyzers.
+   */
+  getASTSupportedLanguages(): string[] {
+    return getASTLangs();
   }
 
   // ── Lifecycle ───────────────────────────────────────────

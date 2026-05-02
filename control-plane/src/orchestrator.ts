@@ -39,7 +39,8 @@ import {
 
 import { ConfigurationError, getConfig } from './config';
 import type { QueueItem } from './session-manager';
-import { defineCodeReviewWorkflow } from '../../packages/workflow-engine/src/review-workflow';
+import { WorkflowEngine, type RunState as WFRunState } from '../../packages/workflow-engine/src/index';
+import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdapters } from '../../packages/workflow-engine/src/review-workflow';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -168,7 +169,7 @@ export interface OrchestrationRun {
 
 // ─── Module Adapters (stubs calling other modules) ────────────
 
-interface ModuleAdapters {
+export interface ModuleAdapters {
   auth: {
     validateWebhook: (payload: string, signature: string, secret: string) => Promise<boolean>;
     authenticate: (token: string) => Promise<UserSession>;
@@ -218,6 +219,8 @@ export class Orchestrator {
   private activeRuns = new Map<string, OrchestrationRun>();
   private concurrentCount = 0;
   private moduleAdapters: ModuleAdapters;
+  private workflowEngine: WorkflowEngine;
+  private workflowEngineAvailable = false;
 
   constructor(adapters?: Partial<ModuleAdapters>) {
     this.moduleAdapters = {
@@ -231,6 +234,38 @@ export class Orchestrator {
       analytics: adapters?.analytics ?? this.createDefaultAnalytics(),
       evidenceStore: adapters?.evidenceStore ?? this.createDefaultEvidenceStore(),
     };
+
+    try {
+      this.workflowEngine = new WorkflowEngine();
+      defineCodeReviewWorkflow(this.workflowEngine);
+      this.registerProductionWorkflow();
+
+      this.workflowEngine.on('step:done', ({ runId, step }) => {
+        console.log(`[Orchestrator] Review ${runId}: step "${step}" completed`);
+      });
+      this.workflowEngine.on('step:fail', ({ runId, step, error }) => {
+        console.error(`[Orchestrator] Review ${runId}: step "${step}" failed: ${error}`);
+      });
+      this.workflowEngine.on('run:complete', ({ runId }) => {
+        console.log(`[Orchestrator] Review ${runId}: workflow completed`);
+      });
+      this.workflowEngine.on('run:fail', ({ runId, error }) => {
+        console.error(`[Orchestrator] Review ${runId}: workflow failed: ${error}`);
+      });
+
+      this.workflowEngineAvailable = true;
+    } catch (error) {
+      console.warn('[Orchestrator] Failed to initialize workflow engine, will use hardcoded sequence:', error);
+      this.workflowEngine = new WorkflowEngine(); // placeholder, won't be used
+    }
+  }
+
+  private registerProductionWorkflow(): void {
+    const steps = createReviewWorkflow(this.moduleAdapters);
+    this.workflowEngine.define(
+      { name: 'code_review', retry: { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 30000 } },
+      steps,
+    );
   }
 
   // ─── Main Entry Point ────────────────────────────────────
@@ -278,44 +313,37 @@ export class Orchestrator {
     this.concurrentCount++;
 
     try {
-      // TODO: Replace hardcoded step sequence with WorkflowEngine integration.
-      // const engine = new WorkflowEngine();
-      // defineCodeReviewWorkflow(engine);
-      // await engine.execute('code_review', { run, moduleAdapters: this.moduleAdapters });
-      // ModuleAdapters need adapter wrappers to match the WorkflowEngine StepFn signature.
-      const stepSequence = this.buildStepSequence(mode);
+      if (this.workflowEngineAvailable) {
+        try {
+          console.log(`[orchestrator] [${run.id}] Executing review via WorkflowEngine`);
 
-      for (const step of stepSequence) {
-        if (params.signal?.aborted) {
-          run.overallStatus = SessionStatus.Cancelled;
-          break;
-        }
+          const repo = this.getRepoInfoFromRun(run);
+          const wfRun = await this.workflowEngine.execute('code_review', {
+            event: params.event,
+            sessionId: params.sessionId,
+            mode,
+            repository: repo,
+            config,
+            knowledgeMaxSources: config.knowledge.maxSources,
+            agentConfig: config.agent,
+          });
 
-        const result = await this.executeStepWithRetry(step, run, params.signal);
-        run.results.push(result);
+          run.results = this.mapWorkflowStepsToResults(wfRun);
+          run.prCommentBody = this.buildPRComment(run);
 
-        if (params.onStepComplete) {
-          params.onStepComplete(result);
-        }
-
-        if (result.status === 'failed') {
-          run.overallStatus = SessionStatus.Failed;
-
-          // If not recoverable, stop immediately
-          const lastError = run.results.filter(r => r.error).pop();
-          if (lastError?.error) {
-            const isRecoverable = await this.isStepRecoverable(step, lastError.error);
-            if (!isRecoverable) break;
+          if (wfRun.status === 'completed') {
+            run.overallStatus = SessionStatus.Completed;
+          } else if (wfRun.status === 'failed') {
+            run.overallStatus = SessionStatus.Failed;
+          } else if (wfRun.status === 'cancelled') {
+            run.overallStatus = SessionStatus.Cancelled;
           }
+        } catch (workflowError) {
+          console.warn('[Orchestrator] Workflow engine execution failed, falling back to hardcoded sequence:', workflowError);
+          await this.executeHardcodedSequence(run, mode, params);
         }
-
-        // Update run timestamp
-        run.results[run.results.length - 1] = result;
-      }
-
-      // If we made it through all steps without failure
-      if (run.overallStatus !== SessionStatus.Failed && run.overallStatus !== SessionStatus.Cancelled) {
-        run.overallStatus = SessionStatus.Completed;
+      } else {
+        await this.executeHardcodedSequence(run, mode, params);
       }
     } catch (error) {
       console.error(`[orchestrator] Fatal error in run ${run.id}:`, error);
@@ -374,9 +402,111 @@ export class Orchestrator {
    */
   setModuleAdapters(adapters: Partial<ModuleAdapters>): void {
     this.moduleAdapters = { ...this.moduleAdapters, ...adapters };
+    if (this.workflowEngineAvailable) {
+      this.registerProductionWorkflow();
+    }
+  }
+
+  /**
+   * Execute the review using a fresh workflow engine with the given adapters.
+   */
+  async executeReview(adapters: ModuleAdapters, context: Record<string, unknown>): Promise<WFRunState> {
+    const steps = createReviewWorkflow(adapters);
+    const reviewEngine = new WorkflowEngine();
+    reviewEngine.define(
+      { name: 'code_review_ad_hoc', retry: { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 30000 } },
+      steps,
+    );
+    return reviewEngine.execute('code_review_ad_hoc', context);
+  }
+
+  /**
+   * List all workflow engine runs.
+   */
+  listWorkflowRuns(): WFRunState[] {
+    return this.workflowEngine.listRuns();
+  }
+
+  /**
+   * Get a specific workflow run by ID.
+   */
+  getWorkflowRun(runId: string): WFRunState | undefined {
+    return this.workflowEngine.getRun(runId);
   }
 
   // ─── Step Execution ──────────────────────────────────────
+
+  private async executeHardcodedSequence(
+    run: OrchestrationRun,
+    mode: AgentMode,
+    params: { signal?: AbortSignal; onStepComplete?: (result: StepResult) => void },
+  ): Promise<void> {
+    const stepSequence = this.buildStepSequence(mode);
+
+    for (const step of stepSequence) {
+      if (params.signal?.aborted) {
+        run.overallStatus = SessionStatus.Cancelled;
+        break;
+      }
+
+      const result = await this.executeStepWithRetry(step, run, params.signal);
+      run.results.push(result);
+
+      if (params.onStepComplete) {
+        params.onStepComplete(result);
+      }
+
+      if (result.status === 'failed') {
+        run.overallStatus = SessionStatus.Failed;
+
+        const lastError = run.results.filter(r => r.error).pop();
+        if (lastError?.error) {
+          const isRecoverable = await this.isStepRecoverable(step, lastError.error);
+          if (!isRecoverable) break;
+        }
+      }
+    }
+
+    if (run.overallStatus !== SessionStatus.Failed && run.overallStatus !== SessionStatus.Cancelled) {
+      run.overallStatus = SessionStatus.Completed;
+    }
+  }
+
+  private mapWorkflowStepsToResults(wfRun: WFRunState): StepResult[] {
+    const results: StepResult[] = [];
+    for (const [name, stepState] of wfRun.steps) {
+      const mappedStep = this.mapStepName(name);
+      results.push({
+        step: mappedStep,
+        status: stepState.status === 'done' ? 'success' :
+                stepState.status === 'failed' ? 'failed' : 'skipped',
+        durationMs: 0,
+        error: stepState.error,
+      });
+    }
+    return results;
+  }
+
+  private mapStepName(wfName: string): ReviewStep {
+    const mapping: Record<string, ReviewStep> = {
+      'validate_webhook': ReviewStep.ValidateWebhook,
+      'parse_event': ReviewStep.ParseEvent,
+      'fetch_pr': ReviewStep.FetchPR,
+      'classify_pr': ReviewStep.ClassifyPR,
+      'design_review': ReviewStep.DesignReview,
+      'security_scan': ReviewStep.SecurityScan,
+      'knowledge_query': ReviewStep.KnowledgeQuery,
+      'mcp_validation': ReviewStep.MCPValidation,
+      'generate_comments': ReviewStep.GenerateComments,
+      'post_comments': ReviewStep.PostComments,
+      'apply_fixes': ReviewStep.ApplyFixes,
+      'verify_fixes': ReviewStep.VerifyFixes,
+      'blind_spot_generation': ReviewStep.BlindSpotGeneration,
+      'report_results': ReviewStep.ReportResults,
+      'impact_translation': ReviewStep.ImpactTranslation,
+    };
+    return mapping[wfName] ?? (wfName as unknown as ReviewStep);
+  }
 
   private buildStepSequence(mode: AgentMode): ReviewStep[] {
     const baseSteps: ReviewStep[] = [

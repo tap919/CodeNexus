@@ -30,5 +30,9 @@ export default defineConfig({
       name: 'recovery',
       testMatch: /recovery\.\w+\.spec\.ts/,
     },
+    {
+      name: 'integration',
+      testMatch: /integration\.\w+\.spec\.ts/,
+    },
   ],
 });

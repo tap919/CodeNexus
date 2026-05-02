@@ -1,12 +1,12 @@
 type StepFn = (ctx: WorkflowContext) => Promise<StepResult>;
 
-interface WorkflowConfig {
+export interface WorkflowConfig {
   name: string;
   retry?: { maxRetries: number; baseDelayMs: number; maxDelayMs: number };
   concurrency?: number;
 }
 
-interface WorkflowStep {
+export interface WorkflowStep {
   name: string;
   fn: StepFn;
   dependsOn?: string[];
@@ -14,7 +14,7 @@ interface WorkflowStep {
   compensation?: StepFn;
 }
 
-interface WorkflowContext {
+export interface WorkflowContext {
   runId: string;
   state: Map<string, unknown>;
   get<T>(key: string): T | undefined;
@@ -22,17 +22,17 @@ interface WorkflowContext {
   log(msg: string): void;
 }
 
-interface StepResult {
+export interface StepResult {
   ok: boolean;
   output?: unknown;
   error?: string;
   recoverable?: boolean;
 }
 
-type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'compensated';
-type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'compensated';
+export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
-interface RunState {
+export interface RunState {
   id: string;
   workflowName: string;
   status: RunStatus;

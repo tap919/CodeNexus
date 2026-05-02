@@ -19,6 +19,7 @@ export const TEST_AUDIENCE = 'codenexus-api';
 // Set env vars for analytics JWT auth middleware
 process.env.AUTH_JWT_SECRET = TEST_JWT_SECRET;
 process.env.AUTH_JWT_ISSUER = TEST_ISSUER;
+process.env.TEST_MODE = 'true';
 
 // --- API response types for test assertions ---
 
@@ -149,8 +150,12 @@ export async function loginAs(
     data: { username, password },
   });
   const body = await res.json();
-  const cookie = res.headers()['set-cookie'];
-  return { statusCode: res.status(), body, cookie };
+  const setCookie = res.headers()['set-cookie'];
+  // Extract only the session cookie (codenexus_session), not refresh token cookie
+  const cookie = typeof setCookie === 'string'
+    ? setCookie.split(',').find((c: string) => c.trim().startsWith('codenexus_session'))
+    : setCookie;
+  return { statusCode: res.status(), body, cookie: cookie || '' };
 }
 
 // --- Auth header helper ---
