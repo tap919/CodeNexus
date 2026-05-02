@@ -1,0 +1,38 @@
+{
+  "name": "@codenexus/mcp-servers",
+  "version": "1.0.0",
+  "description": "CodeNexus MCP Servers — fused Business-Logic-MCP, BookBridge, and CLI-Anything into three Model Context Protocol servers",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/business-logic-server.ts & tsx watch src/bookbridge-server.ts & tsx watch src/cli-generator-server.ts",
+    "start:business": "node dist/business-logic-server.js",
+    "start:bookbridge": "node dist/bookbridge-server.js",
+    "start:cli": "node dist/cli-generator-server.js",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/ --ext .ts"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "better-sqlite3": "^11.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.0",
+    "eslint": "^9.4.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@codenexus/playwright-tests",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:auth": "playwright test --project=auth",
+    "test:authz": "playwright test --project=authz",
+    "test:logic": "playwright test --project=logic",
+    "test:race": "playwright test --project=race",
+    "test:recovery": "playwright test --project=recovery",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.4.1",
+    "jsonwebtoken": "^9.0.3",
+    "otplib": "^12.0.1",
+    "uuid": "^14.0.0"
+  }
+}

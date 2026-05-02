@@ -1,0 +1,39 @@
+{
+  "name": "@codenexus/evidence-store",
+  "version": "1.0.0",
+  "description": "Evidence storage system — artifact management with tamper detection, trace indexing, review sign-off records, and canary token detection",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@codenexus/shared-types": "workspace:*",
+    "uuid": "^10.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "evidence",
+    "artifact-storage",
+    "tamper-detection",
+    "canary-tokens",
+    "audit-trail",
+    "code-review",
+    "codenexus"
+  ],
+  "license": "Apache-2.0"
+}

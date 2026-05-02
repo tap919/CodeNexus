@@ -1,0 +1,71 @@
+{
+  "name": "@codenexus/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodeNexus control-plane — webhook receiver, session orchestration via Durable Objects, and real-time WebSocket hub for the review-fix cycle",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "wrangler dev src/index.ts --port 8787",
+    "build": "wrangler build",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/ --ext .ts",
+    "clean": "rm -rf dist .wrangler"
+  },
+  "dependencies": {
+    "itty-router": "^5.0.18",
+    "toucan-js": "^4.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240529.0",
+    "@types/node": "^20.14.2",
+    "eslint": "^9.4.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "wrangler": "^3.57.1"
+  },
+  "wrangler": {
+    "name": "codenexus-control-plane",
+    "main": "src/index.ts",
+    "compatibility_date": "2024-05-01",
+    "compatibility_flags": [
+      "nodejs_compat"
+    ],
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "SESSION_MANAGER",
+          "class_name": "SessionManager"
+        }
+      ]
+    },
+    "migrations": [
+      {
+        "tag": "v1",
+        "new_classes": ["SessionManager"]
+      }
+    ],
+    "triggers": {
+      "crons": [
+        "*/5 * * * *"
+      ]
+    },
+    "vars": {
+      "CNX_AUTH_PROVIDER": "github",
+      "CNX_AGENT_PROVIDER": "openai",
+      "CNX_AGENT_MODEL": "gpt-4o",
+      "CNX_AGENT_LSP_ENABLED": "true",
+      "CNX_AGENT_MAX_DEPTH": "10",
+      "CNX_SEC_PROMPT_INJECTION": "true",
+      "CNX_SEC_DATA_EXFIL": "true",
+      "CNX_SEC_AGENT_MONITOR": "true",
+      "CNX_KNOWLEDGE_MAX_SOURCES": "10",
+      "CNX_KNOWLEDGE_MIN_CONFIDENCE": "0.6",
+      "CNX_ANALYTICS_PROVIDER": "superset"
+    }
+  }
+}

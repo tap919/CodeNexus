@@ -1,0 +1,32 @@
+{
+  "name": "@codenexus/pr-manager",
+  "version": "0.1.0",
+  "description": "PR Manager — fused agent-reviews comment management with GitHub API integration for CodeNexus",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "dotenv": "^16.4.7",
+    "undici": "^7.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "~5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

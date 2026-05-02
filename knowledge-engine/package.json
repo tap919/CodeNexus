@@ -1,0 +1,57 @@
+{
+  "name": "@codenexus/knowledge-engine",
+  "version": "1.0.0",
+  "description": "Knowledge fusion engine — ingests, synthesizes, and searches multi-format documents (PDF, EPUB, DOCX, TXT). Fuses Book-Synthesis and BookBridge capabilities into the CodeNexus ecosystem.",
+  "keywords": [
+    "codenexus",
+    "knowledge-engine",
+    "document-ingestion",
+    "tf-idf",
+    "hybrid-search",
+    "synthesis",
+    "citation-generation",
+    "flashcard-extraction"
+  ],
+  "homepage": "https://github.com/Skilltech/CodeNexus#readme",
+  "bugs": {
+    "url": "https://github.com/Skilltech/CodeNexus/issues"
+  },
+  "license": "MIT",
+  "author": "Skilltech",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run build",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "epub2": "^3.0.2",
+    "iconv-lite": "^0.6.3",
+  },
+  "devDependencies": {
+    "@types/mammoth": "^0.2.5",
+    "@types/node": "^22.10.0",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/uuid": "^10.0.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Skilltech/CodeNexus.git",
+    "directory": "knowledge-engine"
+  }
+}

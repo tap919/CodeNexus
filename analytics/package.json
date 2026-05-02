@@ -1,0 +1,38 @@
+{
+  "name": "@codenexus/analytics",
+  "version": "1.0.0",
+  "description": "CodeNexus Analytics — Fused from superset: review metric collection and aggregation, time-series tracking, bot vs human ratio analysis, dashboard data generation, and webhook-based reporting endpoint",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.22.1",
+    "jsonwebtoken": "^9.0.3",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.0",
+    "@types/node": "^22.13.0",
+    "@types/uuid": "^10.0.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

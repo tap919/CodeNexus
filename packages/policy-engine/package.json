@@ -1,0 +1,37 @@
+{
+  "name": "@codenexus/policy-engine",
+  "version": "1.0.0",
+  "description": "Single source of truth for CodeNexus risk classification, merge gating, waiver management, and normative rules",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@codenexus/shared-types": "workspace:*",
+    "zod": "^3.23.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "policy",
+    "risk-classification",
+    "merge-gating",
+    "compliance",
+    "codenexus"
+  ],
+  "license": "Apache-2.0"
+}

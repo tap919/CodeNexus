@@ -1,0 +1,35 @@
+{
+  "name": "codenexus",
+  "version": "1.0.0",
+  "description": "Agentic Code Review & Fix Platform — Fusing agent-reviews, authelia, background-agents, Book Synthesis, BookBridge, Business Logic MCP, CLI-Anything, impeccable, superset, Tiz554, opencode, and Claw-Protect",
+  "private": true,
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "build": "bash scripts/build.sh",
+    "deploy": "bash scripts/deploy.sh",
+    "dev": "codenexus",
+    "test": "bash scripts/test.sh",
+    "lint": "bash scripts/lint.sh",
+    "clean": "bash scripts/clean.sh"
+  },
+  "bin": {
+    "codenexus": "./cli-generator/src/index.ts"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "code-review",
+    "ai-agent",
+    "autonomous-fixing",
+    "github",
+    "pr-review",
+    "authelia",
+    "opencode",
+    "mcp",
+    "business-logic",
+    "security",
+    "claw-protect"
+  ],
+  "license": "Apache-2.0"
+}

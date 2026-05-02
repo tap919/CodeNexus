@@ -1,0 +1,40 @@
+{
+  "name": "@codenexus/runtime-verifier",
+  "version": "1.0.0",
+  "description": "Runtime Behavior Review lens — Playwright E2E test orchestration, invariant verification, walkthrough trace narration, and exploitation step generation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@codenexus/shared-types": "workspace:*",
+    "uuid": "^10.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "runtime-verification",
+    "playwright",
+    "e2e-tests",
+    "invariant-verification",
+    "concurrency-testing",
+    "race-conditions",
+    "code-review",
+    "codenexus"
+  ],
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,233 @@
+# ═══════════════════════════════════════════════════════════════
+# CodeNexus - Agentic Code Review & Fix Platform
+# Configuration File
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Server ──────────────────────────────────────────────────
+server:
+  host: "0.0.0.0"
+  port: 8080
+  log_level: "info"  # debug | info | warn | error
+  environment: "development"  # development | staging | production
+
+# ─── Authentication (authelia fusion) ───────────────────────
+auth:
+  provider: "authelia"
+  jwt_secret: "${AUTH_JWT_SECRET}"
+  session_encryption_key: "${SESSION_ENCRYPTION_KEY}"
+  password_pepper: "${AUTH_PASSWORD_PEPPER}"
+
+  oidc:
+    enabled: true
+    issuer: "https://auth.codenexus.dev"
+    access_token_ttl: "1h"
+    refresh_token_ttl: "30d"
+    clients:
+      - id: "codenexus-cli"
+        secret: "${OIDC_CLIENT_SECRET}"
+        redirect_uris:
+          - "http://localhost:8080/callback"
+        grant_types:
+          - "authorization_code"
+          - "client_credentials"
+        scopes:
+          - "openid"
+          - "profile"
+          - "email"
+
+  rate_limiting:
+    enabled: true
+    max_attempts: 5
+    window_minutes: 15
+    ban_duration_minutes: 30
+
+  access_control:
+    default_policy: "deny"
+    rules:
+      - domain: "api.codenexus.dev"
+        policy: "one_factor"
+      - domain: "admin.codenexus.dev"
+        subjects: ["group:admin"]
+        policy: "two_factor"
+      - domain: "webhooks.codenexus.dev"
+        policy: "bypass"
+
+# ─── GitHub Integration (agent-reviews fusion) ──────────────
+github:
+  token: "${GITHUB_TOKEN}"
+  app_id: "${GITHUB_APP_ID}"
+  app_private_key: "${GITHUB_APP_PRIVATE_KEY}"
+  webhook_secret: "${WEBHOOK_SECRET}"
+
+  polling:
+    comment_interval_seconds: 30
+    inactivity_timeout_minutes: 10
+    max_retries: 3
+
+  comment_filtering:
+    exclude_meta_comments: true
+    detect_bots: true
+    known_bots:
+      - "vercel[bot]"
+      - "github-actions[bot]"
+      - "dependabot[bot]"
+      - "codecov[bot]"
+      - "copilot[bot]"
+      - "coderabbitai[bot]"
+      - "sourcery-ai[bot]"
+      - "sonarcloud[bot]"
+      - "codacy[bot]"
+
+# ─── Agent Runtime (opencode fusion) ────────────────────────
+agent:
+  provider: "opencode"
+  model: "claude-sonnet-4-20250514"
+
+  lsp:
+    enabled: true
+    language_servers:
+      typescript: "typescript-language-server"
+      python: "pyright-langserver"
+      rust: "rust-analyzer"
+      go: "gopls"
+
+  reasoning:
+    enabled: true
+    effort: "medium"  # none | low | medium | high | xhigh | max
+
+  modes:
+    review:
+      max_depth: 1
+      auto_fix: false
+    fix:
+      max_depth: 2
+      auto_fix: true
+    build:
+      max_depth: 3
+      auto_fix: true
+
+# ─── MCP Servers (Business-Logic-MCP + BookBridge fusion) ───
+mcp_servers:
+  business_logic:
+    enabled: true
+    transport: "stdio"
+    entities_path: "./data/entities.json"
+
+  bookbridge:
+    enabled: true
+    transport: "stdio"
+    database_path: "./data/bookbridge.sqlite"
+    books_directory: "./books"
+    chunk_size: 800
+    chunk_overlap: 150
+
+  cli_generator:
+    enabled: true
+    transport: "stdio"
+    output_directory: "./generated-clis"
+
+# ─── Security (Claw-Protect fusion) ─────────────────────────
+security:
+  prompt_injection:
+    enabled: true
+    block_threshold: 0.6
+    alert_threshold: 0.3
+
+  data_exfiltration:
+    enabled: true
+    max_bytes_per_session: 10485760  # 10 MB
+    alert_on_baseline_deviation: true
+
+  behavioral_drift:
+    enabled: true
+    baseline_window_minutes: 30
+    drift_threshold: 2.0  # standard deviations
+
+  secrets_scanning:
+    enabled: true
+    entropy_threshold: 4.2
+    min_token_length: 24
+
+  trust_scoring:
+    update_interval_seconds: 60
+    alert_threshold: 0.4
+    good_behavior_boost: 0.02
+
+# ─── Knowledge Engine (Book-Synthesis + BookBridge fusion) ──
+knowledge:
+  book_directory: "./books"
+  max_sources: 5
+  min_confidence: 0.7
+
+  synthesis:
+    chunk_size: 1000
+    chunk_overlap: 200
+    max_concepts: 20
+
+  search:
+    hybrid_weights:
+      keyword: 0.5
+      semantic: 0.5
+    max_results: 10
+
+# ─── Design Review (impeccable fusion) ─────────────────────
+design_review:
+  enabled: true
+
+  rules:
+    typography: true
+    colors: true
+    spacing: true
+    layout: true
+    accessibility: true
+    animation: true
+    components: true
+
+  scoring:
+    min_score: 0
+    max_score: 100
+    pass_threshold: 70
+
+# ─── Analytics (superset fusion) ────────────────────────────
+analytics:
+  provider: "superset"
+  dashboard_url: "https://analytics.codenexus.dev"
+
+  retention:
+    metrics_days: 90
+    events_days: 30
+
+  aggregation:
+    time_intervals:
+      - "hour"
+      - "day"
+      - "week"
+      - "month"
+
+# ─── Plugin System (Tiz554 fusion) ─────────────────────────
+plugins:
+  enabled: true
+  directory: "./plugins"
+  auto_load: true
+  health_check_interval_seconds: 60
+
+  triggers:
+    - "pr.opened"
+    - "pr.synchronize"
+    - "pr.comment.created"
+    - "pr.review.submitted"
+    - "scheduler.cron"
+    - "webhook.incoming"
+
+# ─── Notifications ──────────────────────────────────────────
+notifications:
+  slack:
+    enabled: false
+    webhook_url: "${SLACK_WEBHOOK_URL}"
+
+  email:
+    enabled: false
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    smtp_user: "${SMTP_USER}"
+    smtp_password: "${SMTP_PASSWORD}"
