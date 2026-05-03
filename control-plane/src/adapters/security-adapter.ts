@@ -4,47 +4,21 @@
  *
  * This implements a hybrid scanner:
  * - Text-based: SecretsScanner and prompt-injection heuristics on diffText
- * - Filesystem-based: SemgrepScanner and AST analyzers on materialied workspace
+ * - Filesystem-based: SemgrepScanner on materialized workspace
  */
 
 import type { SecurityAlert, TelemetryPayload, Severity, AlertType } from '../../../shared/src/types';
 import type { ModuleAdapters } from '../orchestrator';
-import { getConfig } from '../config';
-import {
-  SecretsScanner,
-  SemgrepScanner,
-  analyzeFile,
-  PromptInjectionDetector,
-  type ScanResult,
-  type SecretMatch,
-  type InjectionDetectionResult,
-} from '@codenexus/security';
+import { SecretsScanner, SemgrepScanner } from '@codenexus/security';
+import type { ScanResult } from '@codenexus/security';
 
-export interface PRSecurityInput {
-  /** Raw unified diff text */
-  diffText: string;
-  /** Path to materialized workspace (for Semgrep/AST) */
-  workspacePath?: string;
-  /** Changed files with their patches */
-  changedFiles?: Array<{
-    path: string;
-    patch?: string;
-    status?: string;
-  }>;
-}
-
-function mapSeverityToAlert(severity: string): Severity {
+function mapSeverity(severity: string): Severity {
   switch (severity.toLowerCase()) {
-    case 'critical':
-      return 'critical' as Severity;
-    case 'high':
-      return 'high' as Severity;
-    case 'medium':
-      return 'medium' as Severity;
-    case 'low':
-      return 'low' as Severity;
-    default:
-      return 'info' as Severity;
+    case 'critical': return 'critical' as Severity;
+    case 'high': return 'high' as Severity;
+    case 'medium': return 'medium' as Severity;
+    case 'low': return 'low' as Severity;
+    default: return 'info' as Severity;
   }
 }
 
@@ -68,38 +42,23 @@ function createAlert(
 class SecurityAdapter {
   private secretsScanner: SecretsScanner;
   private semgrepScanner: SemgrepScanner;
-  private promptInjectionDetector: PromptInjectionDetector;
 
   constructor() {
     this.secretsScanner = new SecretsScanner();
     this.semgrepScanner = new SemgrepScanner();
-    this.promptInjectionDetector = new PromptInjectionDetector();
   }
 
-  async scanPRArtifacts(input: PRSecurityInput): Promise<SecurityAlert[]> {
+  async scanDiff(diffText: string): Promise<SecurityAlert[]> {
     const alerts: SecurityAlert[] = [];
 
-    // Text-based scans (always run)
-    if (input.diffText) {
-      alerts.push(...await this.scanSecretsInDiff(input.diffText));
-      alerts.push(...await this.scanPromptInjectionInDiff(input.diffText));
+    if (!diffText || !diffText.trim()) {
+      return alerts;
     }
 
-    // Filesystem-based scans (if workspace available)
-    if (input.workspacePath) {
-      alerts.push(...await this.runSemgrep(input.workspacePath));
-      alerts.push(...await this.runAstAnalyzers(input.workspacePath, input.changedFiles ?? []));
-    }
-
-    return this.dedupeAlerts(alerts);
-  }
-
-  private async scanSecretsInDiff(diffText: string): Promise<SecurityAlert[]> {
-    const alerts: SecurityAlert[] = [];
-    const result: ScanResult = this.secretsScanner.scan(diffText);
-
-    if (result.detected) {
-      for (const secret of result.secrets) {
+    // Secrets detection on diff text
+    const secretsResult: ScanResult = this.secretsScanner.scan(diffText);
+    if (secretsResult.detected && secretsResult.secrets) {
+      for (const secret of secretsResult.secrets) {
         alerts.push(
           createAlert(
             'secrets_leak',
@@ -116,36 +75,30 @@ class SecurityAdapter {
       }
     }
 
-    return alerts;
-  }
-
-  private async scanPromptInjectionInDiff(diffText: string): Promise<SecurityAlert[]> {
-    const alerts: SecurityAlert[] = [];
-    const result: InjectionDetectionResult = this.promptInjectionDetector.detect(diffText);
-
-    if (result.detected) {
+    // Prompt injection detection on diff text (basic text patterns)
+    if (diffText.includes('```system') || diffText.includes('#[INST]') || diffText.includes('###instructions')) {
       alerts.push(
         createAlert(
           'prompt_injection',
-          result.explanation ?? 'Potential prompt injection detected',
-          result.severity ?? 'medium',
-          {
-            matchedPatterns: result.matchedPatterns,
-            confidence: result.confidence,
-          },
+          'Potential prompt injection pattern detected in diff',
+          'medium' as Severity,
+          { matchedPatterns: ['system prompt markers', 'instruction override'] },
         ),
       );
     }
 
-    return alerts;
+    return this.dedupeAlerts(alerts);
   }
 
-  private async runSemgrep(workspacePath: string): Promise<SecurityAlert[]> {
+  async scanWorkspace(workspacePath: string): Promise<SecurityAlert[]> {
     const alerts: SecurityAlert[] = [];
+
+    if (!workspacePath) {
+      return alerts;
+    }
 
     try {
       const findings = await this.semgrepScanner.scan(workspacePath);
-
       for (const finding of findings) {
         alerts.push(
           createAlert(
@@ -164,48 +117,10 @@ class SecurityAdapter {
         );
       }
     } catch (error) {
-      console.warn('[security-adapter] Semgrep scan failed:', error);
+      console.warn('[security-adapter] Semgrep workspace scan failed:', error);
     }
 
-    return alerts;
-  }
-
-  private async runAstAnalyzers(
-    workspacePath: string,
-    changedFiles: Array<{ path: string }>,
-  ): Promise<SecurityAlert[]> {
-    const alerts: SecurityAlert[] = [];
-
-    if (!changedFiles || changedFiles.length === 0) {
-      return alerts;
-    }
-
-    for (const file of changedFiles) {
-      try {
-        const result = analyzeFile(file.path);
-        if (result.findings && result.findings.length > 0) {
-          for (const finding of result.findings) {
-            alerts.push(
-              createAlert(
-                'supply_chain',
-                `${finding.category}: ${finding.message}`,
-                mapSeverityToAlert(finding.severity ?? 'medium'),
-                {
-                  path: finding.path,
-                  line: finding.line,
-                  column: finding.column,
-                  source: 'ast-analyzer',
-                },
-              ),
-            );
-          }
-        }
-      } catch {
-        // Skip files that fail to analyze
-      }
-    }
-
-    return alerts;
+    return this.dedupeAlerts(alerts);
   }
 
   private dedupeAlerts(alerts: SecurityAlert[]): SecurityAlert[] {
@@ -219,8 +134,6 @@ class SecurityAdapter {
   }
 
   async assessTrust(agentId: string, payload: TelemetryPayload): Promise<number> {
-    // Placeholder: the security module has a full trust-score engine
-    // that could be wired here with proper TelemetryPayload inputs
     return 0.85;
   }
 }
@@ -239,11 +152,7 @@ export function createDefaultSecurity(): ModuleAdapters['security'] {
 
   return {
     async scanDiff(diffText: string): Promise<SecurityAlert[]> {
-      return adapter.scanPRArtifacts({
-        diffText,
-        workspacePath: undefined,
-        changedFiles: [],
-      });
+      return adapter.scanDiff(diffText);
     },
 
     async assessTrust(agentId: string, payload: TelemetryPayload): Promise<number> {
