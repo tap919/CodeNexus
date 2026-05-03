@@ -20,12 +20,29 @@ const AuthContext = createContext<AuthState>({
   logout: () => {},
 });
 
+const isDev = process.env.NODE_ENV === 'development';
+const devBypass = isDev && process.env.NEXT_PUBLIC_AUTH_BYPASS === 'true';
+
+const devSession = {
+  token: 'dev-token',
+  user: {
+    username: 'Dev User',
+    groups: ['admin'],
+  },
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<{ username: string; groups: string[] } | null>(null);
+  const [token, setToken] = useState<string | null>(devBypass ? devSession.token : null);
+  const [user, setUser] = useState<{ username: string; groups: string[] } | null>(
+    devBypass ? devSession.user : null,
+  );
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    if (devBypass) {
+      setIsLoading(false);
+      return;
+    }
     const stored = localStorage.getItem('codenexus_token');
     if (stored) {
       try {
@@ -62,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ token, user, isAuthenticated: !!token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ token, user, isAuthenticated: devBypass || !!token, isLoading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
