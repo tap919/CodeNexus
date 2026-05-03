@@ -18,6 +18,8 @@
     "clean": "rm -rf dist .wrangler"
   },
   "dependencies": {
+    "@codenexus/pr-manager": "workspace:*",
+    "hono": "^4.0.0",
     "itty-router": "^5.0.18",
     "toucan-js": "^4.0.0",
     "zod": "^3.23.8"

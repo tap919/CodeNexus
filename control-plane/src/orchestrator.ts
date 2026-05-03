@@ -41,6 +41,7 @@ import { ConfigurationError, getConfig } from './config';
 import type { QueueItem } from './session-manager';
 import { WorkflowEngine, type RunState as WFRunState } from '../../packages/workflow-engine/src/index';
 import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdapters } from '../../packages/workflow-engine/src/review-workflow';
+import { createDefaultPRManager } from './adapters/pr-manager-adapter';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -152,6 +153,24 @@ export interface EscalationResult {
 
 // ─── Orchestration Run ────────────────────────────────────────
 
+export interface RunContext {
+  repository?: RepositoryInfo;
+  diff?: string;
+  diffLength?: number;
+  comments?: ReviewComment[];
+  commentStats?: CommentStats;
+  prType?: string;
+  reviewDepth?: number;
+  requiresSecurityReview?: boolean;
+  requiresDesignReview?: boolean;
+  designAudit?: DesignAudit;
+  securityAlerts?: SecurityAlert[];
+  criticalSecurityCount?: number;
+  knowledge?: KnowledgeSynthesis;
+  entities?: BusinessEntity[];
+  agentResponse?: string;
+}
+
 export interface OrchestrationRun {
   id: string;
   sessionId: string;
@@ -165,6 +184,7 @@ export interface OrchestrationRun {
   startedAt: string;
   completedAt: string | null;
   overallStatus: SessionStatus;
+  context: RunContext;
 }
 
 // ─── Module Adapters (stubs calling other modules) ────────────
@@ -307,6 +327,7 @@ export class Orchestrator {
       startedAt: new Date().toISOString(),
       completedAt: null,
       overallStatus: SessionStatus.Running,
+      context: {},
     };
 
     this.activeRuns.set(run.id, run);
@@ -677,13 +698,20 @@ export class Orchestrator {
           this.moduleAdapters.prManager.getComments(repoInfo),
         ]);
 
-        return {
+        const result = {
           diff,
           comments: comments.comments,
           commentStats: comments.stats,
           diffLength: diff.length,
           totalComments: comments.stats.total,
         };
+
+        run.context.diff = diff;
+        run.context.diffLength = diff.length;
+        run.context.comments = comments.comments;
+        run.context.commentStats = comments.stats;
+
+        return result;
       }
 
       // ── Step 4: Classify PR ────────────────────────────
@@ -708,11 +736,17 @@ export class Orchestrator {
       // ── Step 5: Design review ──────────────────────────
       case ReviewStep.DesignReview: {
         log('Running design review');
+        const diff = run.context.diff ?? '';
+        if (!diff) {
+          log('Design review skipped: no diff available');
+          return { skipped: true, reason: 'no_diff' };
+        }
         try {
           const audit = await this.moduleAdapters.designReviewer.auditCode(
-            '',  // Would pass actual code
+            diff,
             this.detectLanguage(run),
           );
+          run.context.designAudit = audit;
           return { audit, antiPatterns: audit.antiPatterns, score: audit.score };
         } catch (error) {
           log(`Design review skipped: ${error}`);
@@ -723,8 +757,15 @@ export class Orchestrator {
       // ── Step 6: Security scan ──────────────────────────
       case ReviewStep.SecurityScan: {
         log('Running security scan');
+        const diff = run.context.diff ?? '';
+        if (!diff) {
+          log('Security scan skipped: no diff available');
+          return { skipped: true, reason: 'no_diff' };
+        }
         try {
-          const alerts = await this.moduleAdapters.security.scanDiff('');
+          const alerts = await this.moduleAdapters.security.scanDiff(diff);
+          run.context.securityAlerts = alerts;
+          run.context.criticalSecurityCount = alerts.filter(a => a.severity === Severity.Critical).length;
           return {
             alerts,
             alertCount: alerts.length,
@@ -1512,15 +1553,7 @@ export class Orchestrator {
   }
 
   private createDefaultPRManager(): ModuleAdapters['prManager'] {
-    return {
-      async getDiff(_repo: RepositoryInfo) { return ''; },
-      async getComments(_repo: RepositoryInfo): Promise<ProcessedComments> {
-        return { comments: [], stats: { total: 0, code: 0, issue: 0, review: 0, bot: 0, human: 0, unresolved: 0, unanswered: 0 } };
-      },
-      async postComment(_repo: RepositoryInfo, _comment: ReviewComment) { /* no-op */ },
-      async postReview(_repo: RepositoryInfo, _comments: ReviewComment[]) { /* no-op */ },
-      async updatePR(_repo: RepositoryInfo, _body: string) { /* no-op */ },
-    };
+    return createDefaultPRManager();
   }
 
   private createDefaultAgentRuntime(): ModuleAdapters['agentRuntime'] {
