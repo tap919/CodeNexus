@@ -44,6 +44,11 @@ import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdap
 import { createDefaultPRManager } from './adapters/pr-manager-adapter';
 import { createDefaultSecurity } from './adapters/security-adapter';
 import { createDefaultFixExecutor } from './adapters/fix-executor';
+import { createDefaultDesignReviewer } from './adapters/design-reviewer-adapter';
+import { createDefaultKnowledgeEngine } from './adapters/knowledge-engine-adapter';
+import { createDefaultAgentRuntime } from './adapters/agent-runtime-adapter';
+import { createDefaultAnalytics } from './adapters/analytics-adapter';
+import { createDefaultAuth } from './adapters/auth-adapter';
 import { LSPAdapter, type SymbolImpact } from './adapters/lsp-adapter';
 import { ImpactAnalyzer, type CrossFileImpact } from './adapters/impact-analyzer';
 import { HistoryAnalyzer, type FileHistory } from './adapters/history-analyzer';
@@ -1816,26 +1821,7 @@ export class Orchestrator {
   // ─── Default Module Adapters (stubs) ─────────────────────
 
   private createDefaultAuth(): ModuleAdapters['auth'] {
-    return {
-      async validateWebhook(_payload: string, _signature: string, _secret: string) {
-        return true;
-      },
-      async authenticate(_token: string): Promise<UserSession> {
-        return {
-          id: crypto.randomUUID(),
-          username: 'bot',
-          groups: ['developers'],
-          emails: [],
-          authenticationLevel: AuthLevel.TwoFactor,
-          authenticationMethods: ['github_oauth'],
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        };
-      },
-      async checkAccess(_user: UserSession, _rules: AccessControlRule[]) {
-        return true;
-      },
-    };
+    return createDefaultAuth();
   }
 
   private createDefaultPRManager(): ModuleAdapters['prManager'] {
@@ -1843,29 +1829,7 @@ export class Orchestrator {
   }
 
   private createDefaultAgentRuntime(): ModuleAdapters['agentRuntime'] {
-    return {
-      async createSession(_config: AgentConfig, _prompt: string, _mode: AgentMode): Promise<AgentSession> {
-        return {
-          id: crypto.randomUUID(),
-          status: SessionStatus.Completed,
-          mode: AgentMode.Review,
-          repository: { owner: '', repo: '', branch: '', prNumber: null, cloneUrl: '' },
-          prompt: '',
-          events: [],
-          startedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
-        };
-      },
-      async executePrompt(_sessionId: string, _prompt: string) { return '{}'; },
-      async streamEvents(_sessionId: string) {
-        return (async function* () {})();
-      },
-      async spawnSandbox(_spec: SandboxSpec) { return crypto.randomUUID(); },
-      async destroySandbox(sandboxId: string) {
-        console.log(`[Orchestrator] Destroying sandbox: ${sandboxId}`);
-        // The sandbox ID is marked as destroyed; actual cleanup is handled by the session manager
-      },
-    };
+    return createDefaultAgentRuntime();
   }
 
   private createDefaultMCPServers(): ModuleAdapters['mcpServers'] {
@@ -1880,38 +1844,15 @@ export class Orchestrator {
   }
 
   private createDefaultDesignReviewer(): ModuleAdapters['designReviewer'] {
-    return {
-      async auditCode(_code: string, _language: string): Promise<DesignAudit> {
-        return {
-          url: '',
-          timestamp: new Date().toISOString(),
-          antiPatterns: [],
-          score: 100,
-          recommendations: [],
-        };
-      },
-    };
+    return createDefaultDesignReviewer();
   }
 
   private createDefaultKnowledgeEngine(): ModuleAdapters['knowledgeEngine'] {
-    return {
-      async search(_query: string, _maxSources: number): Promise<KnowledgeSynthesis> {
-        return {
-          overview: '',
-          keyConcepts: [],
-          crossSourceInsights: [],
-          confidence: 0,
-          sources: [],
-        };
-      },
-    };
+    return createDefaultKnowledgeEngine();
   }
 
   private createDefaultAnalytics(): ModuleAdapters['analytics'] {
-    return {
-      async recordMetric(_metric: ReviewMetric) { /* no-op */ },
-      async recordEvent(_event: string, _data: Record<string, unknown>) { /* no-op */ },
-    };
+    return createDefaultAnalytics();
   }
 
   private createDefaultEvidenceStore(): ModuleAdapters['evidenceStore'] {

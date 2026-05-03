@@ -6,12 +6,18 @@
 
 CodeNexus is a **PR review and remediation platform** that provides a verified vertical slice:
 
-- **Webhook ingestion** — accepts GitHub PR events via HTTP
+- **Webhook ingestion** — accepts GitHub PR events via HTTP with HMAC validation
 - **PR diff retrieval** — fetches real unified diffs from GitHub API
-- **Security analysis** — scans diffs for secrets, prompt injection, supply chain issues
-- **Design review** — anti-pattern detection for code quality
-- **PR comments** — generates structured review reports
-- **Automated fixes** — applies LLM-suggested patches with verification before push
+- **Security analysis** — scans diffs for secrets, prompt injection, supply chain
+- **Semantic analysis** — LSP type-checking and reference resolution on changed symbols
+- **Cross-file impact** — detects breakage candidates in files not in the PR diff
+- **Historical context** — churn signals, bug history, and authorship patterns
+- **Design review** — anti-pattern detection for code and markup quality
+- **Coverage delta** — test coverage comparison between base and head SHAs
+- **Confidence scoring** — unified finding scoring across all signal sources
+- **Policy routing** — routes findings to auto-fix, block-merge, or suggest-inline
+- **PR comments** — generates structured review reports with blind-spot honesty
+- **Automated fixes** — LLM-driven retry loop with verification before push
 
 ```
                     ┌──────────────────────────────────────┐
@@ -38,8 +44,14 @@ CodeNexus is a **PR review and remediation platform** that provides a verified v
 - Structured logging (Pino)
 
 ### 🟡 In Development
+- Design review — anti-pattern detection (pipeline wired, engine improving)
 - OpenTelemetry tracing and metrics
 - Async job queue with rate limiting (BullMQ, Redis)
+- LSP semantic analysis — type-checking changed symbols
+- Cross-file impact analysis — breakage surface detection
+- Historical context analysis — churn and bug frequency signals
+- Coverage delta tracking — base vs head test coverage
+- Confidence scoring and policy-based fix routing
 
 ### 📋 Planned
 - Full autonomous fix with PR creation
@@ -111,13 +123,14 @@ pnpm run test:integration
 ```
 codenexus/
 ├── control-plane/       # Orchestration, webhook server (verified)
+│   └── adapters/        # LSP, cross-file, coverage, history, fix-loop
 ├── auth-service/        # Authentication service (partial)
 ├── agent-runtime/       # AI agent runtime (partial)
 ├── security/           # Security scanning (verified)
 ├── pr-manager/          # GitHub PR operations (verified)
-├── design-reviewer/     # Design reviewing (planned)
+├── design-reviewer/     # Design reviewing (partial)
 ├── knowledge-engine/    # Knowledge retrieval (partial)
-├── analytics/           # Analytics (planned)
+├── analytics/           # Analytics (partial)
 ├── plugin-system/       # Plugin system (planned)
 ├── cli-generator/      # CLI generation (partial)
 ├── shared/              # Shared types (verified)
