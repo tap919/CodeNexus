@@ -32,11 +32,14 @@ CodeNexus is a **PR review and remediation platform** that provides a verified v
 - Security scanning (secrets, prompt injection)
 - PR comment generation
 - ApplyFixes executor with test/lint/build verification
-
-### 🟡 In Development
 - Run context propagation between steps
 - Integration test vertical slice
 - CI pipeline enforcement
+- Structured logging (Pino)
+
+### 🟡 In Development
+- OpenTelemetry tracing and metrics
+- Async job queue with rate limiting (BullMQ, Redis)
 
 ### 📋 Planned
 - Full autonomous fix with PR creation
@@ -107,21 +110,23 @@ pnpm run test:integration
 
 ```
 codenexus/
-├── control-plane/       # Orchestration, webhook server
-├── auth-service/        # Authentication service
-├── agent-runtime/       # AI agent runtime
-├── security/           # Security scanning
-├── pr-manager/          # GitHub PR operations
-├── design-reviewer/     # Design reviewing
-├── knowledge-engine/    # Knowledge retrieval
-├── analytics/           # Analytics
-├── plugin-system/       # Plugin system
-├── cli-generator/      # CLI generation
-├── shared/              # Shared types
-├── packages/            # Shared packages
-├── mcp-servers/        # MCP servers
-└── apps/              # Applications
+├── control-plane/       # Orchestration, webhook server (verified)
+├── auth-service/        # Authentication service (partial)
+├── agent-runtime/       # AI agent runtime (partial)
+├── security/           # Security scanning (verified)
+├── pr-manager/          # GitHub PR operations (verified)
+├── design-reviewer/     # Design reviewing (planned)
+├── knowledge-engine/    # Knowledge retrieval (partial)
+├── analytics/           # Analytics (planned)
+├── plugin-system/       # Plugin system (planned)
+├── cli-generator/      # CLI generation (partial)
+├── shared/              # Shared types (verified)
+├── packages/            # Shared packages (partial)
+├── mcp-servers/        # MCP servers (planned)
+└── apps/              # Applications (planned)
 ```
+
+Maturity: `(verified)` = working end-to-end with tests · `(partial)` = functional but not fully wired · `(planned)` = structural skeleton only
 
 ## Configuration
 
