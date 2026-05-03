@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className="bg-canvas text-fg-primary antialiased font-sans" style={{ background: 'red', minHeight: '100vh' }}>
+      <body className="bg-canvas text-fg-primary antialiased font-sans">
         <QueryProvider>
           <AuthProvider>
             <WebSocketProvider>
