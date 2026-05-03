@@ -646,6 +646,11 @@ export class SessionManager implements DurableObject {
       data,
       timestamp: new Date().toISOString(),
     });
+    // Cap event buffer to prevent unbounded memory growth
+    const maxEvents = 1000;
+    while (this.sessionState && this.sessionState.session.events.length > maxEvents) {
+      this.sessionState.session.events.shift();
+    }
   }
 
   private async persist(): Promise<void> {

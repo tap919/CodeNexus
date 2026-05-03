@@ -942,11 +942,14 @@ async function handleAuth(args: {
     try {
       const fs = await import("node:fs");
 
-      const key = crypto.scryptSync(
-        process.env.CNX_CREDENTIALS_KEY || 'codenexus-default-encryption-key',
-        'codenexus-salt',
-        32
-      );
+      const encryptionKey = process.env.CNX_CREDENTIALS_KEY;
+      if (!encryptionKey) {
+        console.error(colorize("  ✗ CNX_CREDENTIALS_KEY environment variable is required", "red"));
+        process.exit(1);
+      }
+
+      const salt = crypto.randomBytes(16);
+      const key = crypto.scryptSync(encryptionKey, salt, 32);
       const iv = crypto.randomBytes(12);
       const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify({
@@ -954,7 +957,7 @@ async function handleAuth(args: {
         storedAt: new Date().toISOString(),
       }), 'utf8'), cipher.final()]);
       const authTag = cipher.getAuthTag();
-      const data = `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+      const data = `${salt.toString('hex')}:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
       fs.writeFileSync(credsFile, data, { mode: 0o600 });
       console.log(colorize("  ✓ Authentication credentials stored.", "green"));
       console.log(colorize("  Token: ****" + args.token.slice(-4), "cyan"));
@@ -1011,12 +1014,9 @@ async function handleAuth(args: {
 }
 
 function decryptCredentials(encrypted: string): any {
-  const key = crypto.scryptSync(
-    process.env.CNX_CREDENTIALS_KEY || 'codenexus-default-encryption-key',
-    'codenexus-salt',
-    32
-  );
-  const [ivHex, authTagHex, dataHex] = encrypted.split(':');
+  const encryptionKey = process.env.CNX_CREDENTIALS_KEY || 'codenexus-default-encryption-key';
+  const [saltHex, ivHex, authTagHex, dataHex] = encrypted.split(':');
+  const key = crypto.scryptSync(encryptionKey, Buffer.from(saltHex, 'hex'), 32);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
   const decrypted = Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]);

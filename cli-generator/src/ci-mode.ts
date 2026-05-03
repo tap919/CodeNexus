@@ -118,11 +118,17 @@ export async function runCIScan(targetPath: string): Promise<SARIFOutput> {
   const semgrepFindings = await semgrep.scan(resolvedPath);
 
   const secretMatches: SecretMatch[] = [];
-  for (const file of files) {
+  const MAX_SECRET_FILES = 2000;
+  for (const file of files.slice(0, MAX_SECRET_FILES)) {
     try {
       const content = fs.readFileSync(file, 'utf-8');
       const result = secrets.scan(content);
-      secretMatches.push(...result.secrets);
+      for (const match of result.secrets) {
+        if (!match.filePath) {
+          (match as Record<string, unknown>).filePath = file;
+        }
+        secretMatches.push(match);
+      }
     } catch {
       // skip unreadable files
     }
@@ -177,7 +183,7 @@ export async function runCIScan(targetPath: string): Promise<SARIFOutput> {
       ruleId: s.patternName,
       level: severityToResultLevel(s.severity),
       message: { text: `Secret detected: ${s.patternName}` },
-      locations: [buildSarifLocation('<inline>', s.lineNumber, s.position)],
+      locations: [buildSarifLocation((s as Record<string, unknown>).filePath as string || '<unknown>', s.lineNumber, s.position)],
     });
   }
 
@@ -213,19 +219,20 @@ async function main(): Promise<void> {
   const outputIndex = args.indexOf('--output');
 
   const targetPath = pathIndex >= 0 ? args[pathIndex + 1] : '.';
-  const outputFile = outputIndex >= 0 ? args[outputIndex + 1] : 'results.sarif';
 
   if (!targetPath) {
     console.error('Usage: npx tsx ci-mode.ts --path <target> [--output <file>]');
     process.exit(1);
   }
 
+  const outputFile = outputIndex >= 0 ? args[outputIndex + 1] : 'results.sarif';
+
   const result = await runCIScan(targetPath);
   fs.writeFileSync(outputFile, JSON.stringify(result, null, 2));
   console.log(`SARIF output written to ${outputFile}`);
 }
 
-if (process.argv[1]?.includes('ci-mode')) {
+if (process.argv[1]?.includes('ci-mode.ts') || process.argv[1]?.endsWith('ci-mode')) {
   main().catch((err) => {
     console.error('CI scan failed:', err);
     process.exit(1);

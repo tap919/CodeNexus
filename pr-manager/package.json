@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "PR Manager — fused agent-reviews comment management with GitHub API integration for CodeNexus",
   "private": true,
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

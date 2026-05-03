@@ -233,20 +233,6 @@ function base32Decode(str: string): Buffer {
   return Buffer.from(bytes);
 }
 
-function generateTOTP(secret: string, digits = 6, period = 30): string {
-  const counter = Math.floor(Date.now() / 1000 / period);
-  const counterBuf = Buffer.alloc(8);
-  counterBuf.writeBigUInt64BE(BigInt(counter), 0);
-  const key = base32Decode(secret);
-  const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
-  const offset = hmac[hmac.length - 1] & 0x0f;
-  const code = ((hmac[offset] & 0x7f) << 24) |
-    ((hmac[offset + 1] & 0xff) << 16) |
-    ((hmac[offset + 2] & 0xff) << 8) |
-    (hmac[offset + 3] & 0xff);
-  return (code % 10 ** digits).toString().padStart(digits, '0');
-}
-
 function verifyTOTP(token: string, secret: string, window = 1): boolean {
   for (let w = -window; w <= window; w++) {
     const counter = Math.floor(Date.now() / 1000 / 30) + w;
@@ -311,8 +297,6 @@ export class Authenticator {
   async authenticatePassword(
     username: string,
     password: string,
-    remoteIp?: string,
-    userAgent?: string
   ): Promise<PasswordAuthResult> {
     // 1. Look up user
     const user = await this.userProvider.getUser(username);

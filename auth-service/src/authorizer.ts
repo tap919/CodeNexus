@@ -78,7 +78,6 @@ export class Authorizer {
     this.config = {
       defaultPolicy: Policy.Deny,
       trustedProxies: [] as string[],
-      rules: [],
       ...config,
     };
 
@@ -528,7 +527,7 @@ export class Authorizer {
 
   private policyToAuthLevel(
     policy: Policy,
-    session: UserSession | null,
+    _session: UserSession | null,
   ): AuthLevel {
     switch (policy) {
       case Policy.Bypass:

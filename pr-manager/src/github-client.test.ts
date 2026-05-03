@@ -6,7 +6,7 @@ import {
   PRStackInfo,
   StackInfo,
   GitHubClient,
-} from './github-client';
+} from './github-client.js';
 
 describe('Bot detection', () => {
   it('recognizes known bot logins', () => {

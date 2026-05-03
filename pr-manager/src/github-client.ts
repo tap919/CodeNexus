@@ -17,6 +17,7 @@ import { resolve, join } from 'node:path';
 import { request } from 'node:https';
 import { env } from 'node:process';
 import { createSign } from 'node:crypto';
+import { CommentType } from '../../shared/src/types.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ export interface CommentItem {
   body: string;
   author: { login: string; isBot: boolean; avatarUrl: string };
   createdAt: string;
-  type: 'CODE' | 'COMMENT' | 'REVIEW';
+  type: CommentType;
   isResolved: boolean;
   isReply: boolean;
   replyToId: number | null;
@@ -528,7 +529,7 @@ export async function fetchIssueComments(
       avatarUrl: ((item.user as Record<string, unknown>)?.avatar_url as string) ?? '',
     },
     createdAt: (item.created_at as string) ?? '',
-    type: 'COMMENT' as const,
+    type: CommentType.Issue,
     isResolved: false,
     isReply: false,
     replyToId: null,
@@ -564,7 +565,7 @@ export async function fetchPRReviews(
         avatarUrl: ((item.user as Record<string, unknown>)?.avatar_url as string) ?? '',
       },
       createdAt: (item.submitted_at as string) ?? (item.created_at as string) ?? '',
-      type: 'REVIEW' as const,
+      type: CommentType.Review,
       isResolved: false,
       isReply: false,
       replyToId: null,
@@ -589,7 +590,7 @@ function mapCommentItem(item: Record<string, unknown>): CommentItem {
       avatarUrl: (user?.avatar_url as string) ?? '',
     },
     createdAt: (item.created_at as string) ?? '',
-    type: 'CODE' as const,
+    type: CommentType.Code,
     isResolved: false,
     replyToId: (item.in_reply_to_id as number | null) ?? null,
     isReply: (item.in_reply_to_id as number | null) !== null,
@@ -752,7 +753,7 @@ export class GitHubClient {
     const jwt = await this.generateAppJWT();
 
     // Get installation token
-    const result = await this.httpsFetch(
+    const result = await httpsFetch(
       `https://api.github.com/app/installations/${this.appConfig.installationId}/access_tokens`,
       {
         method: 'POST',

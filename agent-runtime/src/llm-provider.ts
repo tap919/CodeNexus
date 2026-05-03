@@ -21,14 +21,23 @@ export interface LLMResponse {
   finishReason: string;
 }
 
+interface ChatCompletionData {
+  choices: Array<{
+    message: { content: string };
+    finish_reason: string;
+  }>;
+  model: string;
+  usage: { prompt_tokens: number; completion_tokens: number };
+}
+
 export class LLMProvider {
-  private config: Required<LLMConfig>;
+  private config: LLMConfig & { maxTokens: number; temperature: number };
 
   constructor(config: LLMConfig) {
     this.config = {
-      maxTokens: 4096,
-      temperature: 0.3,
       ...config,
+      maxTokens: config.maxTokens ?? 4096,
+      temperature: config.temperature ?? 0.3,
     };
   }
 
@@ -56,7 +65,7 @@ export class LLMProvider {
       }),
     });
     if (!res.ok) throw new Error(`DeepSeek API error: ${res.status} ${await res.text()}`);
-    const data = await res.json();
+    const data = await res.json() as ChatCompletionData;
     return {
       content: data.choices[0].message.content,
       model: data.model,
@@ -81,7 +90,7 @@ export class LLMProvider {
       }),
     });
     if (!res.ok) throw new Error(`OpenCode API error: ${res.status} ${await res.text()}`);
-    const data = await res.json();
+    const data = await res.json() as ChatCompletionData;
     return {
       content: data.choices[0].message.content,
       model: data.model,
@@ -108,7 +117,7 @@ export class LLMProvider {
       }),
     });
     if (!res.ok) throw new Error(`OpenRouter API error: ${res.status} ${await res.text()}`);
-    const data = await res.json();
+    const data = await res.json() as ChatCompletionData;
     return {
       content: data.choices[0].message.content,
       model: data.model,

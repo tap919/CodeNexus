@@ -398,7 +398,6 @@ export async function createAuthService(
         const result = await authenticator.authenticatePassword(
           username,
           password,
-          req.ip,
         );
 
         if (!result.success) {
@@ -562,7 +561,7 @@ export async function createAuthService(
   app.post(
     "/api/auth/2fa/enroll",
     requireAuth(sessionStore, config),
-    async (req: Request, res: Response) => {
+    async (_req: Request, res: Response) => {
       try {
         const session = res.locals.session as UserSession;
         const enrollment = await authenticator.enrollTOTP(session.username);
@@ -811,7 +810,7 @@ export async function createAuthService(
    * OIDC Authorization endpoint — initiates the authorization code flow.
    */
   app.get("/oidc/auth", (req: Request, res: Response) => {
-    const { client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method, nonce } = req.query;
+    const { client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, nonce } = req.query;
 
     // Validate client
     const client = config.oidc.clients.find(c => c.clientId === client_id);
@@ -860,7 +859,7 @@ export async function createAuthService(
    */
   app.post("/oidc/token", tokenLimiter, async (req: Request, res: Response) => {
     try {
-      const { grant_type, code, refresh_token, client_id, client_secret } =
+      const { grant_type, refresh_token, client_id, client_secret } =
         req.body;
 
       // Client authentication
@@ -954,7 +953,6 @@ export async function createAuthService(
           authorizationCodes.delete(code);
 
           // Generate tokens
-          const now = Math.floor(Date.now() / 1000);
           const accessToken = await authenticator.generateAccessToken({
             id: codeData.sessionId || 'anonymous',
             username: codeData.clientId,

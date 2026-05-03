@@ -7,7 +7,7 @@
  * Severity enum.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { Severity } from '../../../shared/src/types';
 
 export interface SemgrepFinding {
@@ -35,7 +35,7 @@ export class SemgrepScanner {
 
   private checkSemgrep(): boolean {
     try {
-      execSync('semgrep --version', { stdio: 'ignore', timeout: 5000 });
+      execFileSync('semgrep', ['--version'], { stdio: 'ignore', timeout: 5000 });
       return true;
     } catch {
       console.warn('[Security] semgrep not found — SAST scanning unavailable. Install with: pip install semgrep');
@@ -48,18 +48,32 @@ export class SemgrepScanner {
       return [];
     }
 
+    const config = rules ?? 'auto';
+    const args = ['--config', config, '--json', '--quiet', '--no-git-ignore', targetPath];
+
+    let output: string;
     try {
-      const config = rules ?? 'auto';
-      const cmd = `semgrep --config="${config}" --json --quiet --no-git-ignore "${targetPath}" 2>nul`;
-      const output = execSync(cmd, {
+      output = execFileSync('semgrep', args, {
         timeout: 120000,
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
       });
+    } catch (err) {
+      // semgrep exits non-zero when findings are detected, but stdout still
+      // contains valid JSON with the results
+      const execErr = err as { stdout?: string; stderr?: string; message?: string };
+      if (execErr.stdout) {
+        output = execErr.stdout;
+      } else {
+        console.error('[Security] semgrep scan failed:', execErr.message);
+        return [];
+      }
+    }
 
-      if (!output.trim()) return [];
+    if (!output!.trim()) return [];
 
-      const parsed = JSON.parse(output);
+    try {
+      const parsed = JSON.parse(output!);
       const results = parsed.results ?? [];
 
       return results.map((r: any) => ({
@@ -73,7 +87,7 @@ export class SemgrepScanner {
         fix: r.extra?.fix ?? undefined,
       }));
     } catch (err) {
-      console.error('[Security] semgrep scan failed:', (err as Error).message);
+      console.error('[Security] semgrep scan parse failed:', (err as Error).message);
       return [];
     }
   }

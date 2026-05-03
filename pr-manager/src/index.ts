@@ -38,8 +38,8 @@ import {
   fetchIssueComments,
   fetchPRReviews,
   postReplyToThread,
-  resolveThread as resolveThreadGQL,
-  unresolveThread as unresolveThreadGQL,
+  resolveThread,
+  unresolveThread,
   detectIfBot,
 } from './github-client.js';
 
@@ -284,7 +284,7 @@ export class PRManager {
    */
   async resolveThread(threadId: string): Promise<void> {
     const cfg = await this.ensureInitialized();
-    await resolveThreadGQL(threadId, cfg.token);
+    await resolveThread(threadId, cfg.token);
   }
 
   /**
@@ -292,7 +292,7 @@ export class PRManager {
    */
   async unresolveThread(threadId: string): Promise<void> {
     const cfg = await this.ensureInitialized();
-    await unresolveThreadGQL(threadId, cfg.token);
+    await unresolveThread(threadId, cfg.token);
   }
 
   /**
@@ -511,8 +511,8 @@ export {
   fetchIssueComments,
   fetchPRReviews,
   postReplyToThread,
-  resolveThreadGQL as resolveThread,
-  unresolveThreadGQL as unresolveThread,
+  resolveThread,
+  unresolveThread,
   detectIfBot,
   parseLinkHeader,
   fetchPaginated,
