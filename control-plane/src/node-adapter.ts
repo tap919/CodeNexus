@@ -1,7 +1,10 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import pino from 'pino';
 import { WorkflowEngine } from '../../packages/workflow-engine/src/index';
 import { defineCodeReviewWorkflow } from '../../packages/workflow-engine/src/review-workflow';
+
+const logger = pino({ name: 'node-adapter' });
 
 export function createNodeApp(): express.Application {
   const app = express();
@@ -31,9 +34,14 @@ export function createNodeApp(): express.Application {
   app.post('/api/webhooks/github', async (req, res) => {
     const signature = req.headers['x-hub-signature-256'] as string;
     const secret = process.env.CNX_GITHUB_WEBHOOK_SECRET || '';
-    const body = JSON.stringify(req.body);
 
-    if (secret && !verifyWebhookSignature(body, signature, secret)) {
+    if (!secret) {
+      res.status(401).json({ error: 'webhook_secret_not_configured', message: 'Webhook secret must be configured via CNX_GITHUB_WEBHOOK_SECRET' });
+      return;
+    }
+
+    const body = JSON.stringify(req.body);
+    if (!verifyWebhookSignature(body, signature, secret)) {
       res.status(401).json({ error: 'invalid_signature', message: 'HMAC verification failed' });
       return;
     }
@@ -59,7 +67,7 @@ export function createNodeApp(): express.Application {
           deliveryId,
         });
       } catch (err) {
-        console.error('[NodeAdapter] Workflow execution failed:', err);
+        logger.error({ err }, 'Workflow execution failed');
         res.status(500).json({ error: 'workflow_failed', message: (err as Error).message });
       }
     } else {
@@ -135,8 +143,6 @@ if (require.main === module) {
   const port = parseInt(process.env.PORT || '8787', 10);
   const app = createNodeApp();
   app.listen(port, () => {
-    console.log(`[CodeNexus] Control Plane (Node.js) running on http://localhost:${port}`);
-    console.log(`[CodeNexus] Health: http://localhost:${port}/health`);
-    console.log(`[CodeNexus] Webhook: http://localhost:${port}/api/webhooks/github`);
+    logger.info({ port }, 'Control Plane running (Node.js)');
   });
 }

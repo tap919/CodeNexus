@@ -31,8 +31,8 @@ export default defineConfig({
       testMatch: /recovery\.\w+\.spec\.ts/,
     },
     {
-      name: 'integration',
-      testMatch: /integration\.\w+\.spec\.ts/,
+      name: 'e2e-server',
+      testMatch: /e2e\.server\.spec\.ts/,
     },
   ],
 });
