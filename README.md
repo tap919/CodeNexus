@@ -1,44 +1,60 @@
-# CodeNexus — Agentic Code Review & Fix Platform
+# CodeNexus — Agentic PR Review and Fix Platform
 
-> **Fusing**: agent-reviews, authelia, background-agents, Book Synthesis, BookBridge, Business Logic MCP, CLI-Anything, impeccable, superset, Tiz554, opencode, and Claw-Protect into a unified agentic system.
+> A modular PR review and fix platform with webhook ingestion, security scanning, and autonomous fix execution.
 
 ## What It Is
 
-CodeNexus is an **end-to-end, autonomous code review and fix platform** that combines 13 open-source projects into a single cohesive system. It detects PR review comments, analyzes code with full business and design context, applies fixes autonomously, and provides rich analytics — all secured by enterprise-grade authentication and threat detection.
+CodeNexus is a **PR review and remediation platform** that provides a verified vertical slice:
+
+- **Webhook ingestion** — accepts GitHub PR events via HTTP
+- **PR diff retrieval** — fetches real unified diffs from GitHub API
+- **Security analysis** — scans diffs for secrets, prompt injection, supply chain issues
+- **Design review** — anti-pattern detection for code quality
+- **PR comments** — generates structured review reports
+- **Automated fixes** — applies LLM-suggested patches with verification before push
 
 ```
                     ┌──────────────────────────────────────┐
-                    │           CodeNexus System            │
+                    │         CodeNexus System              │
                     ├──────────────────────────────────────┤
-                    │  Auth ║ Control ║ Agent ║  Security  │
-                    │  Plane ║ Plane   ║ Runtime║  Layer    │
+                    │  Webhook → Diff → Security → Comment │
+                    │          → Fix → Verify → Push      │
                     ├──────────────────────────────────────┤
-                    │  MCP Servers  ║  Knowledge Engine    │
-                    │  (Business    ║  (Book Synthesis +   │
-                    │   Logic,      ║   BookBridge)        │
-                    │   CLI Gen)    ║                      │
-                    ├──────────────────────────────────────┤
-                    │  PR Mgmt ║ Design ║ Analytics║Plugin │
-                    │  (reviews)║(review)║(superset)║System │
+                    │  Adapters: PR, Security, Execution  │
                     └──────────────────────────────────────┘
 ```
 
-## Fused Projects
+## Current Status
 
-| # | Project | Role in CodeNexus |
-|---|---------|-------------------|
-| 1 | **agent-reviews** | GitHub PR comment fetching, bot detection, reply/resolve workflow |
-| 2 | **authelia** | SSO authentication, 2FA, OIDC, role-based access control |
-| 3 | **background-agents** | Async sandbox orchestration, control plane, Durable Objects |
-| 4 | **Book-Synthesis** | Multi-source document synthesis with confidence scoring |
-| 5 | **BookBridge** | Local knowledge library with hybrid search + MCP server |
-| 6 | **Business-Logic-MCP** | Business rules, state machines, decision tables via MCP |
-| 7 | **CLI-Anything** | Auto-generates CLI interfaces for any tool/app |
-| 8 | **impeccable** | Design quality review with anti-pattern detection |
-| 9 | **superset** | Analytics dashboard, data visualization, BI metrics |
-| 10 | **Tiz554** | Plugin architecture, 24/7 worker, 1000+ skills |
-| 11 | **opencode** | Core AI coding agent with TUI, LSP, multi-provider |
-| 12 | **Claw-Protect** | Enterprise security: prompt injection, data exfil, monitoring |
+### ✅ Verified (Working End-to-End)
+- Webhook server with HMAC signature verification
+- PR diff fetching via GitHub API
+- Security scanning (secrets, prompt injection)
+- PR comment generation
+- ApplyFixes executor with test/lint/build verification
+
+### 🟡 In Progress
+- Design review anti-pattern detection
+- Knowledge engine integration
+- MCP server business logic validation
+
+### 📋 Planned
+- Full autonomous fix with PR creation
+- Multi-repo support
+- Analytics dashboard
+
+## Influences and Integrated Concepts
+
+CodeNexus draws inspiration from multiple open-source systems for its modular architecture:
+
+| Inspiration | Area |
+|------------|------|
+| **agent-reviews** | PR comment fetching and processing |
+| **Claw-Protect** | Security scanning (secrets, injection) |
+| **opencode** | Agent runtime patterns |
+| **impeccable** | Design review patterns |
+| **background-agents** | Orchestration patterns |
+| **superset** | Analytics patterns |
 
 ## Architecture
 

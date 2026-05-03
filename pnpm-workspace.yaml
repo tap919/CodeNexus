@@ -1,0 +1,17 @@
+packages:
+  - agent-runtime
+  - analytics
+  - auth-service
+  - cli
+  - cli-generator
+  - control-plane
+  - design-reviewer
+  - knowledge-engine
+  - plugin-system
+  - pr-manager
+  - security
+  - shared
+  - packages/*
+  - mcp-servers/*
+  - apps/*
+  - integration
