@@ -9,6 +9,7 @@
     "deploy": "bash scripts/deploy.sh",
     "dev": "codenexus",
     "test": "bash scripts/test.sh",
+    "test:integration": "vitest run integration",
     "lint": "bash scripts/lint.sh",
     "clean": "bash scripts/clean.sh"
   },
