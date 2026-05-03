@@ -11,6 +11,11 @@ export function createNodeApp(): express.Application {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
 
+  // Root
+  app.get('/', (_req, res) => {
+    res.json({ service: 'CodeNexus Control Plane', status: 'running', version: '0.2.0' });
+  });
+
   // Health
   app.get('/health', (_req, res) => {
     res.json({
