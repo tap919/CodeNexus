@@ -75,7 +75,7 @@ export default function DashboardPage() {
             {selectedRepo && reviewState !== 'loading' && (
               <button
                 onClick={handleBeginReview}
-                className="btn-primary px-5 py-2 rounded-lg text-sm font-semibold text-white cursor-pointer"
+                className="btn-pill-white"
               >
                 Begin Review
               </button>
@@ -100,10 +100,10 @@ export default function DashboardPage() {
                   <span className="status-dot online" />
                   AI-Native Code Review
                 </div>
-                <h1 className="text-4xl font-bold text-text-primary mb-3 tracking-tight">
+                <h1 className="text-display text-text-primary mb-4">
                   Code<span className="neon-text-cyan">Nexus</span>
                 </h1>
-                <p className="text-base text-text-secondary max-w-md">
+                <p className="text-base text-text-secondary text-prose mx-auto">
                   Agentic code review, security scanning, and automated fixes — in one pipeline.
                 </p>
               </div>
@@ -152,7 +152,7 @@ export default function DashboardPage() {
                     <button
                       type="submit"
                       disabled={!repoUrl.trim()}
-                      className="btn-primary px-8 py-3.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                      className="btn-pill-white"
                     >
                       Analyze
                     </button>
@@ -188,8 +188,7 @@ export default function DashboardPage() {
                       ref={fileRef}
                       type="file"
                       className="hidden"
-                      // @ts-ignore
-                      webkitdirectory=""
+                      {...({ webkitdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
                       multiple
                       onChange={handleFileChange}
                     />
@@ -197,13 +196,13 @@ export default function DashboardPage() {
                 )}
 
                 {/* Feature highlights */}
-                <div className="grid grid-cols-3 gap-3 mt-8">
+                <div className="grid grid-cols-3 gap-4 mt-8">
                   {[
-                    { icon: '🔍', label: 'Security Scan', desc: 'Secrets, SAST, supply chain' },
-                    { icon: '🤖', label: 'AI Review', desc: 'GPT-4o · 3 passes' },
-                    { icon: '⚡', label: 'Auto-Fix', desc: 'Test · Lint · Build · Push' },
+                    { icon: '🔍', label: 'Security Scan', desc: 'Secrets, SAST, supply chain', color: 'violet' as const },
+                    { icon: '🤖', label: 'AI Review', desc: 'GPT-4o · 3 passes', color: 'blue' as const },
+                    { icon: '⚡', label: 'Auto-Fix', desc: 'Test · Lint · Build · Push', color: 'cyan' as const },
                   ].map((f) => (
-                    <div key={f.label} className="skeuo-card p-4 flex flex-col gap-2">
+                    <div key={f.label} className={`spotlight-card spotlight-card-${f.color} p-6 flex flex-col gap-2`}>
                       <span className="text-xl">{f.icon}</span>
                       <div>
                         <p className="text-sm font-semibold text-text-primary">{f.label}</p>
@@ -236,8 +235,8 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <div className="flex gap-2 mt-4">
-                      <button className="flex-1 btn-primary py-2 rounded-lg text-xs font-semibold text-white">✓ Approve</button>
-                      <button className="flex-1 py-2 rounded-lg text-xs font-semibold text-text-muted bg-base-700/60 border border-base-600/50 hover:bg-base-700 transition-all">✕ Reject</button>
+                      <button className="flex-1 btn-pill-white text-xs">✓ Approve</button>
+                      <button className="flex-1 btn-pill-ghost text-xs">✕ Reject</button>
                     </div>
                   </div>
                 </div>

@@ -79,8 +79,13 @@ function StatCard({ label, value, change, trend, icon, color }: typeof stats[0])
   const trendColor = trend === 'up' ? 'text-accent-green' : trend === 'down' ? 'text-accent-red' : 'text-text-muted';
   const trendSymbol = trend === 'up' ? '↑' : trend === 'down' ? '↓' : '→';
 
+  const cardClass = color === 'purple' ? 'spotlight-card spotlight-card-violet' 
+    : color === 'cyan' ? 'spotlight-card spotlight-card-cyan'
+    : color === 'blue' ? 'spotlight-card spotlight-card-blue'
+    : 'spotlight-card';
+
   return (
-    <div className={`skeuo-card glass-panel-hover p-4 ${cm.glow} border ${cm.border}`}>
+    <div className={`${cardClass} p-6 ${cm.glow} border ${cm.border}`}>
       <div className="flex items-start justify-between mb-3">
         <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cm.icon}`}>
           {icon}

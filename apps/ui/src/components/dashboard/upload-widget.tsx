@@ -83,7 +83,7 @@ export function UploadWidget({ onRepoSelect }: UploadWidgetProps) {
             </p>
           </div>
         </div>
-        <input ref={fileRef} type="file" className="hidden" webkitdirectory="" multiple onChange={handleFileChange} />
+        <input ref={fileRef} type="file" className="hidden" {...({ webkitdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>)} multiple onChange={handleFileChange} />
       </div>
     </div>
   );

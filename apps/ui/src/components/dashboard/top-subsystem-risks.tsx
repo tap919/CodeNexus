@@ -3,7 +3,7 @@
 import { cn } from '@/lib/utils';
 import { AlertTriangle, Shield, Database, FileSearch } from 'lucide-react';
 
-const MOCK_RISKS = [
+const MOCK_RISKS: Array<{ subsystem: string; risk: number; findings: number; type: 'critical' | 'high' | 'medium' | 'low' }> = [
   { subsystem: 'Auth Service', risk: 72, findings: 4, type: 'critical' },
   { subsystem: 'Security Detectors', risk: 58, findings: 3, type: 'high' },
   { subsystem: 'CLI Generator', risk: 45, findings: 2, type: 'medium' },

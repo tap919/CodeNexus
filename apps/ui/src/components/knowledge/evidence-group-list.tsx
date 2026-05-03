@@ -173,3 +173,5 @@ export function EvidenceGroupList({ groups, onResultClick, pinned = [], onPin }:
     </div>
   );
 }
+
+export type { EvidenceResult, EvidenceGroup };

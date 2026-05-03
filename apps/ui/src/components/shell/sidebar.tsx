@@ -75,7 +75,7 @@ export function Sidebar({ activeView, onNavigate }: SidebarProps) {
   return (
     <aside className="w-56 h-screen flex flex-col border-r border-base-700/50 bg-base-850/80 backdrop-blur-xl select-none flex-shrink-0">
       {/* Logo */}
-      <div className="px-5 pt-5 pb-4">
+      <div className="px-4 pt-5 pb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-blue to-accent-cyan flex items-center justify-center shadow-lg glow-blue">
             <span className="text-white text-sm font-bold">C</span>
@@ -96,13 +96,13 @@ export function Sidebar({ activeView, onNavigate }: SidebarProps) {
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+            className={`sidebar-item w-full ${
               activeView === item.id
-                ? 'nav-active text-text-primary'
-                : 'text-text-secondary hover:text-text-primary hover:bg-base-700/20 border border-transparent'
+                ? 'sidebar-item-active'
+                : ''
             }`}
           >
-            <span className={activeView === item.id ? 'text-accent-blue' : 'text-text-muted'}>
+            <span className={activeView === item.id ? 'text-accent-blue' : 'text-text-secondary sidebar-icon-hover p-1 -m-1 rounded'}>
               {item.icon}
             </span>
             <span className="flex-1 text-left">{item.label}</span>
@@ -116,7 +116,7 @@ export function Sidebar({ activeView, onNavigate }: SidebarProps) {
       </nav>
 
       {/* Bottom status */}
-      <div className="p-4 border-t border-base-700/50">
+      <div className="px-4 py-3 border-t border-base-700/50">
         <div className="flex items-center gap-2 mb-2">
           <span className="status-dot online" />
           <span className="text-xs text-accent-green font-medium">System Online</span>

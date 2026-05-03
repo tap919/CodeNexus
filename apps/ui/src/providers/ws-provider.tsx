@@ -21,7 +21,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Map<string, Set<WSMessageHandler>>>(new Map());
-  const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectRef = useRef<ReturnType<typeof setTimeout>>(null);
   const attemptRef = useRef(0);
 
   const connect = () => {
@@ -56,7 +56,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     connect();
     return () => {
       mountedRef.current = false;
-      clearTimeout(reconnectRef.current);
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
       wsRef.current?.close();
     };
   }, []);
