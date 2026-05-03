@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@codenexus/pr-manager": "workspace:*",
+    "@codenexus/security": "workspace:*",
     "hono": "^4.0.0",
     "itty-router": "^5.0.18",
     "toucan-js": "^4.0.0",

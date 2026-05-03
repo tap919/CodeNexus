@@ -42,6 +42,7 @@ import type { QueueItem } from './session-manager';
 import { WorkflowEngine, type RunState as WFRunState } from '../../packages/workflow-engine/src/index';
 import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdapters } from '../../packages/workflow-engine/src/review-workflow';
 import { createDefaultPRManager } from './adapters/pr-manager-adapter';
+import { createDefaultSecurity } from './adapters/security-adapter';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -1590,10 +1591,7 @@ export class Orchestrator {
   }
 
   private createDefaultSecurity(): ModuleAdapters['security'] {
-    return {
-      async scanDiff(_diff: string) { return []; },
-      async assessTrust(_agentId: string, _payload: TelemetryPayload) { return 0.95; },
-    };
+    return createDefaultSecurity();
   }
 
   private createDefaultDesignReviewer(): ModuleAdapters['designReviewer'] {
