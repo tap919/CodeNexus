@@ -87,21 +87,19 @@ CodeNexus draws architectural inspiration from:
 ## Quick Start
 
 ```bash
-# 1. Clone and install
+# 1. Clone and install (requires pnpm)
 git clone https://github.com/tap919/CodeNexus.git
 cd CodeNexus
-
-# 2. Install dependencies (requires pnpm)
 pnpm install
+
+# 2. Build workspace
+pnpm run build
 
 # 3. Configure environment
 export CNX_GITHUB_TOKEN=your_github_token
 export CNX_GITHUB_WEBHOOK_SECRET=your_webhook_secret
 
-# 4. Build workspace
-pnpm run build
-
-# 5. Run integration tests
+# 4. Run tests
 pnpm run test:integration
 ```
 
@@ -148,7 +146,7 @@ export CNX_AGENT_MODEL=gpt-4o
 # Build entire workspace
 pnpm run build
 
-# Run tests
+# Run all tests
 pnpm run test
 
 # Run integration tests
@@ -157,19 +155,10 @@ pnpm run test:integration
 # Lint
 pnpm run lint
 
-# Development server (control-plane)
+# Development server (control-plane node adapter)
 cd control-plane && pnpm run dev:node
 ```
 
-## Security
-
-CodeNexus includes security scanning:
-- **Secrets detection** — API keys, tokens in diffs
-- **Prompt injection** — Malicious prompt patterns
-- **Supply chain** — Semgrep integration
-
 ## License
 
-Apache 2.0
-
-CodeNexus is an original implementation. Referenced upstream projects retain their own licenses.
+Apache 2.0 — CodeNexus is an original implementation.
