@@ -43,6 +43,7 @@ import { WorkflowEngine, type RunState as WFRunState } from '../../packages/work
 import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdapters } from '../../packages/workflow-engine/src/review-workflow';
 import { createDefaultPRManager } from './adapters/pr-manager-adapter';
 import { createDefaultSecurity } from './adapters/security-adapter';
+import { createDefaultFixExecutor } from './adapters/fix-executor';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -203,6 +204,22 @@ export interface ModuleAdapters {
     postReview: (repo: RepositoryInfo, comments: ReviewComment[]) => Promise<void>;
     updatePR: (repo: RepositoryInfo, body: string) => Promise<void>;
   };
+  fixExecutor?: {
+    executeFixes: (input: {
+      repo: RepositoryInfo;
+      patches: Array<{ path: string; content: string }>;
+    }) => Promise<{
+      success: boolean;
+      branchName?: string;
+      commitSha?: string;
+      patchSummary?: { attempted: number; applied: number; failed: number };
+      testResults?: { passed: boolean; output: string };
+      lintResults?: { passed: boolean; output: string };
+      buildResults?: { passed: boolean; output: string };
+      error?: string;
+      timestamp: string;
+    }>;
+  };
   agentRuntime: {
     createSession: (config: AgentConfig, prompt: string, mode: AgentMode) => Promise<AgentSession>;
     executePrompt: (sessionId: string, prompt: string) => Promise<string>;
@@ -247,6 +264,7 @@ export class Orchestrator {
     this.moduleAdapters = {
       auth: adapters?.auth ?? this.createDefaultAuth(),
       prManager: adapters?.prManager ?? this.createDefaultPRManager(),
+      fixExecutor: adapters?.fixExecutor ?? this.createDefaultFixExecutor(),
       agentRuntime: adapters?.agentRuntime ?? this.createDefaultAgentRuntime(),
       mcpServers: adapters?.mcpServers ?? this.createDefaultMCPServers(),
       security: adapters?.security ?? this.createDefaultSecurity(),
@@ -1642,6 +1660,10 @@ export class Orchestrator {
         return recordId;
       },
     };
+  }
+
+  private createDefaultFixExecutor(): ModuleAdapters['fixExecutor'] {
+    return createDefaultFixExecutor();
   }
 }
 
