@@ -44,6 +44,13 @@ import { defineCodeReviewWorkflow, createReviewWorkflow, type ReviewWorkflowAdap
 import { createDefaultPRManager } from './adapters/pr-manager-adapter';
 import { createDefaultSecurity } from './adapters/security-adapter';
 import { createDefaultFixExecutor } from './adapters/fix-executor';
+import { LSPAdapter, type SymbolImpact } from './adapters/lsp-adapter';
+import { ImpactAnalyzer, type CrossFileImpact } from './adapters/impact-analyzer';
+import { HistoryAnalyzer, type FileHistory } from './adapters/history-analyzer';
+import { CoverageAnalyzer, type CoverageDelta } from './adapters/coverage-analyzer';
+import { scoreFindings, type ScoredFinding } from './adapters/confidence-scorer';
+import { FixLoop } from './adapters/fix-loop';
+import { PolicyEngine, type PolicyDecision } from './adapters/policy-engine';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -63,6 +70,12 @@ export enum ReviewStep {
   FetchPR = 'fetch_pr',
   /** 4. Classify PR type & determine review scope */
   ClassifyPR = 'classify_pr',
+  /** 4.5. LSP semantic analysis on changed symbols */
+  LSPAnalysis = 'lsp_analysis',
+  /** 4.6. Cross-file impact analysis for breakage surface */
+  CrossFileImpact = 'cross_file_impact',
+  /** 4.7. Historical churn & bug analysis */
+  HistoricalContext = 'historical_context',
   /** 5. Run design review (anti-pattern detection) */
   DesignReview = 'design_review',
   /** 6. Run security scan */
@@ -71,16 +84,20 @@ export enum ReviewStep {
   KnowledgeQuery = 'knowledge_query',
   /** 8. Call MCP servers for business logic */
   MCPValidation = 'mcp_validation',
+  /** 8.5. Test coverage delta between base and head */
+  CoverageDelta = 'coverage_delta',
   /** 9. Generate review comments */
   GenerateComments = 'generate_comments',
   /** 10. Post review comments to PR */
   PostComments = 'post_comments',
+  /** 10.5. Generate blind spot declarations for all sections with findings */
+  BlindSpotGeneration = 'blind_spot_generation',
+  /** 10.6. Policy engine — route each finding to action */
+  PolicyDecision = 'policy_decision',
   /** 11. Apply automated fixes */
   ApplyFixes = 'apply_fixes',
   /** 12. Verify fixes */
   VerifyFixes = 'verify_fixes',
-  /** 12.5 Generate blind spot declarations for all sections with findings */
-  BlindSpotGeneration = 'blind_spot_generation',
   /** 13. Report results */
   ReportResults = 'report_results',
   /** 13.5 Translate escalated findings into build impact cards */
@@ -92,15 +109,20 @@ export const REVIEW_STEP_LABELS: Record<ReviewStep, string> = {
   [ReviewStep.ParseEvent]: 'Parse event & extract PR context',
   [ReviewStep.FetchPR]: 'Fetch PR diff & metadata',
   [ReviewStep.ClassifyPR]: 'Classify PR type & determine review scope',
+  [ReviewStep.LSPAnalysis]: 'LSP semantic analysis on changed symbols',
+  [ReviewStep.CrossFileImpact]: 'Cross-file impact analysis for breakage surface',
+  [ReviewStep.HistoricalContext]: 'Historical churn & bug frequency analysis',
   [ReviewStep.DesignReview]: 'Run design review (anti-pattern detection)',
   [ReviewStep.SecurityScan]: 'Run security scan',
   [ReviewStep.KnowledgeQuery]: 'Query knowledge engine for relevant context',
   [ReviewStep.MCPValidation]: 'Call MCP servers for business logic validation',
+  [ReviewStep.CoverageDelta]: 'Test coverage delta between base and head',
   [ReviewStep.GenerateComments]: 'Generate review comments via agent',
   [ReviewStep.PostComments]: 'Post review comments to PR',
   [ReviewStep.ApplyFixes]: 'Apply automated fixes',
   [ReviewStep.VerifyFixes]: 'Verify fixes (compile, lint, test)',
   [ReviewStep.BlindSpotGeneration]: 'Generate blind spot declarations for all sections with findings',
+  [ReviewStep.PolicyDecision]: 'Policy engine — route each finding to appropriate action',
   [ReviewStep.ReportResults]: 'Report results to analytics',
   [ReviewStep.ImpactTranslation]: 'Translate escalated findings into build impact cards',
 };
@@ -159,6 +181,8 @@ export interface RunContext {
   repository?: RepositoryInfo;
   diff?: string;
   diffLength?: number;
+  diffFiles?: Array<{ path: string; patch: string }>;
+  workspacePath?: string;
   comments?: ReviewComment[];
   commentStats?: CommentStats;
   prType?: string;
@@ -168,6 +192,12 @@ export interface RunContext {
   designAudit?: DesignAudit;
   securityAlerts?: SecurityAlert[];
   criticalSecurityCount?: number;
+  symbolImpacts?: SymbolImpact[];
+  crossFileImpacts?: CrossFileImpact[];
+  fileHistories?: FileHistory[];
+  coverageDelta?: CoverageDelta;
+  scoredFindings?: ScoredFinding[];
+  policyDecisions?: PolicyDecision[];
   knowledge?: KnowledgeSynthesis;
   entities?: BusinessEntity[];
   agentResponse?: string;
@@ -533,15 +563,20 @@ export class Orchestrator {
       'parse_event': ReviewStep.ParseEvent,
       'fetch_pr': ReviewStep.FetchPR,
       'classify_pr': ReviewStep.ClassifyPR,
+      'lsp_analysis': ReviewStep.LSPAnalysis,
+      'cross_file_impact': ReviewStep.CrossFileImpact,
+      'historical_context': ReviewStep.HistoricalContext,
       'design_review': ReviewStep.DesignReview,
       'security_scan': ReviewStep.SecurityScan,
       'knowledge_query': ReviewStep.KnowledgeQuery,
       'mcp_validation': ReviewStep.MCPValidation,
+      'coverage_delta': ReviewStep.CoverageDelta,
       'generate_comments': ReviewStep.GenerateComments,
       'post_comments': ReviewStep.PostComments,
+      'blind_spot_generation': ReviewStep.BlindSpotGeneration,
+      'policy_decision': ReviewStep.PolicyDecision,
       'apply_fixes': ReviewStep.ApplyFixes,
       'verify_fixes': ReviewStep.VerifyFixes,
-      'blind_spot_generation': ReviewStep.BlindSpotGeneration,
       'report_results': ReviewStep.ReportResults,
       'impact_translation': ReviewStep.ImpactTranslation,
     };
@@ -556,9 +591,16 @@ export class Orchestrator {
       ReviewStep.ClassifyPR,
     ];
 
+    const deepAnalysisSteps: ReviewStep[] = [
+      ReviewStep.LSPAnalysis,
+      ReviewStep.CrossFileImpact,
+      ReviewStep.HistoricalContext,
+    ];
+
     const reviewSteps: ReviewStep[] = [
-      ReviewStep.DesignReview,
       ReviewStep.SecurityScan,
+      ReviewStep.DesignReview,
+      ReviewStep.CoverageDelta,
       ReviewStep.KnowledgeQuery,
       ReviewStep.MCPValidation,
       ReviewStep.GenerateComments,
@@ -567,6 +609,10 @@ export class Orchestrator {
 
     const blindSpotStep: ReviewStep[] = [
       ReviewStep.BlindSpotGeneration,
+    ];
+
+    const policyStep: ReviewStep[] = [
+      ReviewStep.PolicyDecision,
     ];
 
     const fixSteps: ReviewStep[] = [
@@ -581,14 +627,14 @@ export class Orchestrator {
 
     switch (mode) {
       case AgentMode.Plan:
-        return [...baseSteps, ReviewStep.KnowledgeQuery, ReviewStep.MCPValidation, ...blindSpotStep, ...finalSteps];
+        return [...baseSteps, ...deepAnalysisSteps, ReviewStep.KnowledgeQuery, ReviewStep.MCPValidation, ...blindSpotStep, ...finalSteps];
       case AgentMode.Fix:
-        return [...baseSteps, ...reviewSteps, ...blindSpotStep, ...fixSteps, ...finalSteps];
+        return [...baseSteps, ...deepAnalysisSteps, ...reviewSteps, ...blindSpotStep, ...policyStep, ...fixSteps, ...finalSteps];
       case AgentMode.Build:
-        return [...baseSteps, ReviewStep.KnowledgeQuery, ...blindSpotStep, ...fixSteps, ...finalSteps];
+        return [...baseSteps, ...deepAnalysisSteps, ReviewStep.KnowledgeQuery, ...blindSpotStep, ...policyStep, ...fixSteps, ...finalSteps];
       case AgentMode.Review:
       default:
-        return [...baseSteps, ...reviewSteps, ...blindSpotStep, ...finalSteps];
+        return [...baseSteps, ...deepAnalysisSteps, ...reviewSteps, ...blindSpotStep, ...finalSteps];
     }
   }
 
@@ -727,6 +773,8 @@ export class Orchestrator {
 
         run.context.diff = diff;
         run.context.diffLength = diff.length;
+        run.context.diffFiles = this.parseDiffFiles(diff);
+        run.context.workspacePath = process.cwd();
         run.context.comments = comments.comments;
         run.context.commentStats = comments.stats;
 
@@ -750,6 +798,97 @@ export class Orchestrator {
           requiresDesignReview: prType === 'feature' || prType === 'refactor',
           estimatedEffort: reviewDepth,
         };
+      }
+
+      // ── Step 4.5: LSP semantic analysis ─────────────────
+      case ReviewStep.LSPAnalysis: {
+        log('Running LSP semantic analysis on changed symbols');
+        const wsPath = run.context.workspacePath ?? process.cwd();
+        const language = this.detectLanguage(run) as 'typescript' | 'python' | 'rust';
+        const diffFiles = run.context.diffFiles ?? [];
+
+        if (diffFiles.length === 0) {
+          log('LSP analysis skipped: no diff files');
+          return { skipped: true, reason: 'no_diff_files' };
+        }
+
+        try {
+          const lsp = new LSPAdapter(wsPath);
+          await lsp.start(language);
+          const impacts = await lsp.analyzeChangedSymbols(diffFiles);
+          await lsp.stop();
+
+          run.context.symbolImpacts = impacts;
+
+          return {
+            impactCount: impacts.length,
+            typeErrorCount: impacts.flatMap(i => i.typeErrors).length,
+            externalUsageSites: impacts.flatMap(i => i.usageSites).length,
+          };
+        } catch (error) {
+          log(`LSP analysis skipped: ${error}`);
+          return { skipped: true, reason: String(error) };
+        }
+      }
+
+      // ── Step 4.6: Cross-file impact analysis ────────────
+      case ReviewStep.CrossFileImpact: {
+        log('Running cross-file impact analysis');
+        const wsPath = run.context.workspacePath ?? process.cwd();
+        const diffFiles = run.context.diffFiles ?? [];
+        const changedPaths = diffFiles.map(f => f.path);
+
+        if (changedPaths.length === 0) {
+          log('Cross-file impact skipped: no changed files');
+          return { skipped: true, reason: 'no_changed_files' };
+        }
+
+        try {
+          const analyzer = new ImpactAnalyzer(wsPath);
+          const impacts = await analyzer.analyze(changedPaths, changedPaths);
+          run.context.crossFileImpacts = impacts;
+
+          const highRisk = impacts.filter(i => i.breakageRisk === 'high');
+
+          return {
+            totalImpacts: impacts.length,
+            highRiskCount: highRisk.length,
+            affectedFileCount: [...new Set(impacts.flatMap(i => i.affectedFiles))].length,
+          };
+        } catch (error) {
+          log(`Cross-file impact skipped: ${error}`);
+          return { skipped: true, reason: String(error) };
+        }
+      }
+
+      // ── Step 4.7: Historical context ────────────────────
+      case ReviewStep.HistoricalContext: {
+        log('Analyzing historical churn and bug patterns');
+        const wsPath = run.context.workspacePath ?? process.cwd();
+        const diffFiles = run.context.diffFiles ?? [];
+        const filePaths = diffFiles.map(f => f.path);
+
+        if (filePaths.length === 0) {
+          log('Historical context skipped: no files');
+          return { skipped: true, reason: 'no_files' };
+        }
+
+        try {
+          const analyzer = new HistoryAnalyzer(wsPath);
+          const histories = await analyzer.analyzeFiles(filePaths);
+          run.context.fileHistories = histories;
+
+          const highChurn = histories.filter(h => h.churnSignal === 'high');
+
+          return {
+            fileCount: histories.length,
+            highChurnCount: highChurn.length,
+            totalAuthors: [...new Set(histories.flatMap(h => h.uniqueAuthors))].length,
+          };
+        } catch (error) {
+          log(`Historical context skipped: ${error}`);
+          return { skipped: true, reason: String(error) };
+        }
       }
 
       // ── Step 5: Design review ──────────────────────────
@@ -825,6 +964,30 @@ export class Orchestrator {
         }
       }
 
+      // ── Step 8.5: Coverage delta ───────────────────────
+      case ReviewStep.CoverageDelta: {
+        log('Computing test coverage delta');
+        const wsPath = run.context.workspacePath ?? process.cwd();
+        const baseSha = run.event.pullRequest.base.sha;
+        const headSha = run.event.pullRequest.head.sha;
+
+        try {
+          const analyzer = new CoverageAnalyzer(wsPath);
+          const delta = await analyzer.computeDelta(baseSha, headSha);
+          run.context.coverageDelta = delta;
+
+          return {
+            baseLineCoverage: delta.baseLineCoverage,
+            headLineCoverage: delta.headLineCoverage,
+            delta: delta.delta,
+            droppedFiles: delta.droppedFiles.length,
+          };
+        } catch (error) {
+          log(`Coverage delta skipped: ${error}`);
+          return { skipped: true, reason: String(error) };
+        }
+      }
+
       // ── Step 9: Generate comments ──────────────────────
       case ReviewStep.GenerateComments: {
         log('Generating review comments via agent');
@@ -871,27 +1034,67 @@ export class Orchestrator {
           return { skipped: true, reason: 'Not in fix/build mode' };
         }
 
-        const repoInfo = this.getRepoInfoFromRun(run);
-        const sandboxSpec: SandboxSpec = {
-          image: 'codenexus/agent-sandbox:latest',
-          resources: { cpu: 2, memory: '4GB', disk: '10GB' },
-          preBuildCommands: ['npm install', 'pip install -r requirements.txt'],
-          environment: { CNX_SESSION_ID: run.sessionId },
+        const wsPath = run.context.workspacePath ?? process.cwd();
+        const diffContext = run.context.diff ?? '';
+        const policyDecisions = run.context.policyDecisions ?? [];
+        const autoFixCandidates = new PolicyEngine().getAutoFixCandidates(policyDecisions);
+
+        if (autoFixCandidates.length === 0) {
+          log('No auto-fix candidates found by policy engine');
+          return { fixesApplied: 0, fixesAttempted: 0, reason: 'no_auto_fix_candidates' };
+        }
+
+        // Wire LLM provider through agent runtime
+        const llmProvider = {
+          complete: async (prompt: string) => {
+            const session = await this.moduleAdapters.agentRuntime.createSession(
+              run.config.agent,
+              prompt,
+              AgentMode.Fix,
+            );
+            return this.moduleAdapters.agentRuntime.executePrompt(session.id, prompt);
+          },
         };
 
-        try {
-          const sandboxId = await this.moduleAdapters.agentRuntime.spawnSandbox(sandboxSpec);
+        // Wire verifier to run test/lint/build (simplified)
+        const verifier = {
+          verify: async (path: string) => {
+            try {
+              const { execSync } = await import('child_process');
+              execSync('pnpm run typecheck', { cwd: path, timeout: 60000, stdio: 'pipe' });
+              return { passed: true, output: 'Typecheck passed' };
+            } catch (e: any) {
+              return { passed: false, output: e.stderr?.toString() ?? String(e) };
+            }
+          },
+        };
 
-          // Fix would be applied here
-          return {
-            sandboxId,
-            fixesApplied: 0,
-            fixesAttempted: 0,
-          };
-        } catch (error) {
-          log(`Fix application failed: ${error}`);
-          return { skipped: true, reason: String(error) };
+        const fixLoop = new FixLoop(llmProvider, verifier, 3);
+        const results = [];
+        let fixesApplied = 0;
+        let fixesAttempted = 0;
+
+        for (const decision of autoFixCandidates) {
+          fixesAttempted++;
+          try {
+            const result = await fixLoop.fix(decision.finding, wsPath, diffContext);
+            results.push(result);
+            if (result.status === 'fixed') fixesApplied++;
+          } catch (error) {
+            log(`Fix failed for ${decision.finding.id}: ${error}`);
+          }
         }
+
+        return {
+          fixesApplied,
+          fixesAttempted,
+          autoFixCandidates: autoFixCandidates.length,
+          fixResults: results.map(r => ({
+            findingId: r.finding.id,
+            status: r.status,
+            attempts: r.attempts.length,
+          })),
+        };
       }
 
       // ── Step 12: Verify fixes ──────────────────────────
@@ -938,6 +1141,41 @@ export class Orchestrator {
           blindSpotsGenerated: blindSpots.length,
           sectionsWithFindings: sectionFindings.size,
           blindSpotIds: blindSpots.map((bs) => bs.id),
+        };
+      }
+
+      // ── Step 10.6: Policy decision ──────────────────────
+      case ReviewStep.PolicyDecision: {
+        log('Running policy engine on scored findings');
+
+        // Score findings from all upstream sources
+        const scoredFindings = scoreFindings({
+          securityAlerts: run.context.securityAlerts ?? [],
+          symbolImpacts: run.context.symbolImpacts ?? [],
+          crossFileImpacts: run.context.crossFileImpacts ?? [],
+          fileHistories: run.context.fileHistories ?? [],
+          coverageDelta: run.context.coverageDelta?.delta,
+        });
+        run.context.scoredFindings = scoredFindings;
+
+        // Apply policy to route each finding
+        const engine = new PolicyEngine();
+        const decisions = engine.decide(scoredFindings);
+        run.context.policyDecisions = decisions;
+
+        const decisionsByAction = {
+          'block-merge': decisions.filter(d => d.action === 'block-merge').length,
+          'auto-apply': decisions.filter(d => d.action === 'auto-apply').length,
+          'suggest-inline': decisions.filter(d => d.action === 'suggest-inline').length,
+          'open-fix-pr': decisions.filter(d => d.action === 'open-fix-pr').length,
+          'inform-only': decisions.filter(d => d.action === 'inform-only').length,
+        };
+
+        return {
+          totalFindings: scoredFindings.length,
+          totalDecisions: decisions.length,
+          blockMerge: engine.shouldBlockMerge(decisions),
+          decisionsByAction,
         };
       }
 
@@ -1048,6 +1286,13 @@ export class Orchestrator {
         return false; // Can't proceed without parsing
       case ReviewStep.FetchPR:
         return true; // Can retry fetching
+      case ReviewStep.LSPAnalysis:
+      case ReviewStep.CrossFileImpact:
+      case ReviewStep.HistoricalContext:
+      case ReviewStep.CoverageDelta:
+        return true; // Analysis steps are retryable
+      case ReviewStep.PolicyDecision:
+        return true; // Policy evaluation is retryable
       default:
         return true; // Most steps are recoverable
     }
@@ -1544,6 +1789,28 @@ export class Orchestrator {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Parse a unified diff string into structured per-file patches.
+   */
+  private parseDiffFiles(diff: string): Array<{ path: string; patch: string }> {
+    if (!diff) return [];
+
+    const files: Array<{ path: string; patch: string }> = [];
+    const chunks = diff.split(/^diff --git /m).filter(Boolean);
+
+    for (const chunk of chunks) {
+      const headerMatch = chunk.match(/^a\/(.+?) b\/(.+?)$/m);
+      if (headerMatch) {
+        files.push({
+          path: headerMatch[1],
+          patch: `diff --git ${chunk}`,
+        });
+      }
+    }
+
+    return files;
   }
 
   // ─── Default Module Adapters (stubs) ─────────────────────
