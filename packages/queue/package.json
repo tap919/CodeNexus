@@ -1,7 +1,7 @@
 {
-  "name": "@codenexus/shared-types",
+  "name": "@codenexus/queue",
   "version": "1.0.0",
-  "description": "Shared type definitions for the CodeNexus platform",
+  "description": "CodeNexus BullMQ queue - async job processing with rate limiting",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "pino": "^9.6.0"
+    "bullmq": "^5.28.0",
+    "ioredis": "^5.4.1"
   },
   "devDependencies": {
     "typescript": "^5.4.0"

@@ -6,6 +6,7 @@
  * Cloudflare Workers entrypoint.
  */
 
+import pino from 'pino';
 import { createHono } from 'hono';
 import { cors } from 'hono/cors';
 import { getCookie } from 'hono/cookie';
@@ -16,6 +17,7 @@ import { loadConfig, getConfig, ConfigurationError } from './config';
 import { SessionManager } from './session-manager';
 import { createSign } from 'node:crypto';
 
+const logger = pino({ name: 'server' });
 const app = new createHono();
 
 const VERSION = '0.2.0';
@@ -65,7 +67,7 @@ app.post('/webhook/github', async (c) => {
   const delivery = c.req.header('X-GitHub-Delivery');
   const signature = c.req.header('X-Hub-Signature-256');
 
-  console.log(`[webhook] Received ${eventName} event (delivery: ${delivery})`);
+  logger.info({ event: eventName, delivery }, 'Received GitHub webhook event');
 
   let webhookSecret: string;
   try {
@@ -76,12 +78,12 @@ app.post('/webhook/github', async (c) => {
 
   const isValid = await verifyGitHubWebhook(bodyRaw, signature, webhookSecret);
   if (!isValid) {
-    console.warn('[webhook] Invalid signature');
+    logger.warn('Invalid webhook signature');
     return c.json({ error: 'invalid signature' }, 401);
   }
 
   if (eventName !== 'pull_request') {
-    console.log(`[webhook] Ignoring non-PR event: ${eventName}`);
+    logger.info({ event: eventName }, 'Ignoring non-PR event');
     return c.json({ ok: true, event: eventName, processed: false });
   }
 
@@ -109,7 +111,7 @@ app.post('/webhook/github', async (c) => {
 
   const skipActions = ['closed', 'synchronize'];
   if (prEvent.action && !skipActions.includes(prEvent.action)) {
-    console.log(`[webhook] Skipping action: ${prEvent.action}`);
+    logger.debug({ action: prEvent.action }, 'Skipping action');
     return c.json({ ok: true, action: prEvent.action, processed: false });
   }
 
@@ -146,9 +148,7 @@ app.post('/webhook/github', async (c) => {
   };
 
   const sessionId = crypto.randomUUID();
-  console.log(
-    `[webhook] Starting review for ${repo.full_name}/pull/${pr.number} (session: ${sessionId})`,
-  );
+  logger.info({ repo: repo.full_name, pr: pr.number, session: sessionId }, 'Starting review');
 
   try {
     const orchestrator = new Orchestrator();
@@ -157,9 +157,7 @@ app.post('/webhook/github', async (c) => {
       sessionId,
     });
 
-    console.log(
-      `[webhook] Review complete: ${run.id} (status: ${run.overallStatus})`,
-    );
+    logger.info({ runId: run.id, status: run.overallStatus }, 'Review completed');
 
     return c.json({
       ok: true,
@@ -169,7 +167,7 @@ app.post('/webhook/github', async (c) => {
       commentLength: run.prCommentBody.length,
     });
   } catch (error) {
-    console.error('[webhook] Orchestration failed:', error);
+    logger.error({ err: error }, 'Orchestration failed');
     return c.json(
       {
         ok: false,

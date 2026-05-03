@@ -34,8 +34,7 @@
     "epub2": "^3.0.2",
     "iconv-lite": "^0.6.3"
   },
-  "devDependencies": {
-    "@types/mammoth": "^0.2.5",
+"devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pdf-parse": "^1.1.4",
     "@types/uuid": "^10.0.0",

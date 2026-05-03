@@ -20,8 +20,11 @@
   "dependencies": {
     "@codenexus/pr-manager": "workspace:*",
     "@codenexus/security": "workspace:*",
+    "bullmq": "^5.28.0",
     "hono": "^4.0.0",
+    "ioredis": "^5.4.1",
     "itty-router": "^5.0.18",
+    "pino": "^9.6.0",
     "toucan-js": "^4.0.0",
     "zod": "^3.23.8"
   },

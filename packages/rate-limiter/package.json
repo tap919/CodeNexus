@@ -1,7 +1,7 @@
 {
-  "name": "@codenexus/shared-types",
+  "name": "@codenexus/rate-limiter",
   "version": "1.0.0",
-  "description": "Shared type definitions for the CodeNexus platform",
+  "description": "CodeNexus rate limiting - per-repo, per-IP rate limits",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "pino": "^9.6.0"
+    "@codenexus/shared-types": "workspace:*",
+    "express-rate-limit": "^7.5.1"
   },
   "devDependencies": {
     "typescript": "^5.4.0"
